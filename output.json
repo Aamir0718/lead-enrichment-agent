@@ -1,0 +1,80 @@
+[
+  {
+    "domain": "postman.com",
+    "status": "success",
+    "error": null,
+    "company_overview": "Postman provides an API platform that lets users design, test, manage, and distribute APIs and services. It streamlines every stage of the API lifecycle and enables collaboration for faster, higher\u2011quality API development.",
+    "target_audience": "Engineers and developers building, testing, and managing APIs, especially teams and enterprises that need end\u2011to\u2011end API lifecycle support.",
+    "contact_emails": [
+      "help@postman.com"
+    ],
+    "leadership": [
+      {
+        "name": "Abhinav Asthana",
+        "role": "CEO and Co\u2011founder",
+        "linkedin_url": null
+      },
+      {
+        "name": "Ankit Sobti",
+        "role": null,
+        "linkedin_url": null
+      },
+      {
+        "name": "Abhijit Kane",
+        "role": null,
+        "linkedin_url": null
+      }
+    ],
+    "confidence_score": 0.92,
+    "critique_notes": [],
+    "pages_scraped": [
+      "https://postman.com",
+      "https://www.postman.com/company/about-postman",
+      "https://www.postman.com/company/contact-sales",
+      "https://www.postman.com/company/contact-us",
+      "https://www.postman.com/company/press-media"
+    ],
+    "llm_calls_used": 1
+  },
+  {
+    "domain": "supabase.com",
+    "status": "success",
+    "error": null,
+    "company_overview": "Supabase provides a fully managed Postgres\u2011based development platform that bundles a database, authentication, auto\u2011generated APIs, realtime sync, storage, edge functions, and vector search. It enables developers to launch and scale applications quickly without managing infrastructure.",
+    "target_audience": "Developers building web, mobile, or AI applications who need a complete Postgres backend with auth, APIs, storage, and serverless functions.",
+    "contact_emails": [],
+    "leadership": [],
+    "confidence_score": 0.5,
+    "critique_notes": [],
+    "pages_scraped": [
+      "https://supabase.com",
+      "https://supabase.com/solutions/innovation-teams",
+      "https://supabase.com/contact/sales",
+      "https://supabase.com/company",
+      "https://supabase.com/contact-us"
+    ],
+    "llm_calls_used": 1
+  },
+  {
+    "domain": "vapi.ai",
+    "status": "success",
+    "error": null,
+    "company_overview": "Vapi offers an open voice\u2011agent platform that lets businesses build, deploy, and continuously improve advanced voice AI agents at enterprise scale.",
+    "target_audience": "Enterprises and developers building voice AI agents for customer support, lead qualification, appointment scheduling, and other use cases.",
+    "contact_emails": [],
+    "leadership": [
+      {
+        "name": "Jason Mitura",
+        "role": "VP of Software Development",
+        "linkedin_url": null
+      }
+    ],
+    "confidence_score": 0.66,
+    "critique_notes": [],
+    "pages_scraped": [
+      "https://vapi.ai",
+      "https://vapi.ai/pricing"
+    ],
+    "llm_calls_used": 1
+  }
+]
