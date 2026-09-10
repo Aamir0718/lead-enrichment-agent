@@ -21,6 +21,14 @@ Graph shape:
 `retry` is only ever taken once: the Critique Agent's own node marks the
 state as already-retried before requesting a second pass, so a second
 "needs_retry" can never fire.
+
+`stream_pipeline()` is the primary entry point: it runs the graph via
+LangGraph's own `.stream()` (not `.invoke()`) so callers get a human-
+readable log line after every node, not just the final result -- both
+main.py (CLI) and server.py (API) use it so nobody is ever staring at a
+silent "running" state with no way to tell what the agent is actually
+doing. `run_pipeline()` is a thin wrapper for callers that just want the
+final CompanyIntel.
 """
 from __future__ import annotations
 
@@ -114,6 +122,9 @@ def finalize_node(state: PipelineState) -> dict:
     """Main Agent's aggregation step -- builds the final CompanyIntel."""
     intel = CompanyIntel(domain=state["domain"], pages_scraped=state.get("pages_scraped", []))
     intel.llm_calls_used = state.get("llm_calls_used", 0)
+    # Keep the exact text the LLM saw attached to the result -- proof every
+    # field can be checked against, not just the model's word for it.
+    intel.source_text = state.get("combined_text", "")
 
     if not state.get("pages"):
         intel.status = "failed"
@@ -193,8 +204,86 @@ def get_compiled_graph():
     return _compiled
 
 
-def run_pipeline(domain: str) -> CompanyIntel:
-    """Run the full graph for one domain and return its final CompanyIntel."""
+# --- Live progress reporting ---------------------------------------------
+#
+# Turns each node's raw output into a human-readable line, so both the CLI
+# and the web app can show what the agent is actually doing step by step
+# instead of a single opaque "running..." state -- this is also where a
+# viewer can see the Critique Agent's verification work happen, not just
+# its final verdict.
+
+def _describe_step(node_name: str, output: dict) -> str:
+    if node_name == "scrape":
+        n = len(output.get("pages") or {})
+        if n == 0:
+            errs = "; ".join(output.get("scrape_errors") or [])
+            return f"Scraper: no pages could be fetched ({errs or 'no reachable pages'})"
+        extra = f" + {n - 1} subpage(s)" if n > 1 else ""
+        return f"Scraper: fetched homepage{extra} ({n} page(s) total)"
+
+    if node_name == "process":
+        chars = len(output.get("combined_text") or "")
+        return f"Processor: cleaned scraped HTML down to {chars:,} characters of text for the LLM"
+
+    if node_name == "extract":
+        err = output.get("extraction_error")
+        call_n = output.get("llm_calls_used", "?")
+        if err:
+            return f"Extractor: LLM call #{call_n} failed -- {err}"
+        return f"Extractor: LLM call #{call_n} returned structured data"
+
+    if node_name == "critique":
+        notes = output.get("critique_notes") or []
+        n_emails = len(output.get("cleaned_emails") or [])
+        n_leads = len(output.get("cleaned_leadership") or [])
+        if output.get("needs_retry"):
+            return "Critique: result unusable (no overview or ICP) -- requesting one retry"
+        if notes:
+            return f"Critique: flagged {len(notes)} unverifiable item(s) and dropped them -- {n_emails} email(s), {n_leads} leader(s) confirmed against source"
+        return f"Critique: verified {n_emails} email(s) and {n_leads} leader(s) against the scraped source -- nothing dropped"
+
+    if node_name == "retry":
+        return "Retrying extraction with corrective feedback from Critique"
+
+    if node_name == "finalize":
+        result: Optional[CompanyIntel] = output.get("result")
+        if result is None:
+            return "Finalize: no result produced"
+        return f"Finalize: status={result.status}, confidence={result.confidence_score:.2f}"
+
+    return f"{node_name}: complete"
+
+
+def stream_pipeline(domain: str):
+    """Runs the graph for one domain, yielding a log line after every node
+    completes, and finally the CompanyIntel result. Both the CLI (main.py)
+    and the API (server.py) consume this -- it's the single source of
+    "what actually happened" for a run.
+
+    Yields dicts: {"type": "log", "message": str} for each step, then
+    {"type": "result", "result": CompanyIntel} once.
+    """
     graph = get_compiled_graph()
-    final_state = graph.invoke({"domain": domain, "llm_calls_used": 0, "retried": False})
-    return final_state["result"]
+    initial_state = {"domain": domain, "llm_calls_used": 0, "retried": False}
+
+    yield {"type": "log", "message": f"Starting pipeline for {domain}"}
+
+    result: Optional[CompanyIntel] = None
+    for step in graph.stream(initial_state, stream_mode="updates"):
+        for node_name, output in step.items():
+            yield {"type": "log", "message": _describe_step(node_name, output)}
+            if node_name == "finalize":
+                result = output.get("result")
+
+    yield {"type": "result", "result": result}
+
+
+def run_pipeline(domain: str) -> CompanyIntel:
+    """Run the full graph for one domain and return its final CompanyIntel.
+    Convenience wrapper around stream_pipeline() for callers that don't
+    need the intermediate log lines (e.g. quick scripts)."""
+    result = None
+    for event in stream_pipeline(domain):
+        if event["type"] == "result":
+            result = event["result"]
+    return result

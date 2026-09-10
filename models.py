@@ -41,3 +41,12 @@ class CompanyIntel(BaseModel):
 
     pages_scraped: List[str] = Field(default_factory=list)
     llm_calls_used: int = 0
+
+    source_text: str = Field(
+        default="",
+        description=(
+            "The cleaned, scraped text actually sent to the LLM for extraction -- kept "
+            "as evidence so every field above can be checked against its source instead "
+            "of taken on faith."
+        ),
+    )

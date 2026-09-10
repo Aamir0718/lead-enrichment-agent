@@ -101,8 +101,42 @@ Groq (free/cheap tier) — user will supply GROQ_API_KEY in .env.
       updating -- 0 console errors throughout. Re-ran the CLI afterward to
       restore the full 3-domain output.json (the live UI test had
       overwritten it with a 1-domain run).
+- [x] Added proof/verifiability (user request: "I should be able to see
+      what's actually happening... how do we know the data is right"):
+      - graph.py: new `_describe_step()` + `stream_pipeline()` generator,
+        using LangGraph's `.stream(mode="updates")` instead of `.invoke()`
+        so a human-readable log line is emitted after every node
+        (`Scraper: fetched homepage + 1 subpage(s)`, `Critique: verified 2
+        email(s) and 3 leader(s) against the scraped source`, etc).
+        `run_pipeline()` kept as a thin wrapper for simple callers.
+      - models.py: CompanyIntel gained `source_text` -- the exact cleaned
+        text the Extractor saw, carried through to output.json as
+        evidence every field can be checked against.
+      - main.py: CLI now logs every step line (not just start/done).
+      - server.py: Job gained a `logs` list, appended to during
+        `_execute_job`, returned from `GET /api/enrich/{job_id}` alongside
+        results.
+      - frontend: new ConsolePanel.jsx (timestamped, auto-scrolling, shown
+        while a job has any logs) and a SourceProof block inside
+        ResultCard.jsx (verification note + collapsible raw source text).
+      Verified against the real running server (not just the build): the
+      live-run screenshot shows the console filling in with real per-node
+      lines and the expanded source panel showing actual scraped vapi.ai
+      text, zero console errors.
 - [ ] User records Loom walkthrough (their side)
 - [ ] Submit email to support@softwarebrio.com
+
+## Known environment quirk (not a project bug)
+During testing, an earlier accidental `uvicorn server:app` invocation (the
+backtick/command-substitution incident, now fixed) left a stray process
+holding port 8000 that this sandboxed session's Get-Process/taskkill can't
+see or kill (though `netstat -ano` confirms it's still there). Worked
+around by testing on port 8001. If the user hits "address already in use"
+on port 8000 themselves, it's likely this leftover -- closing the terminal
+it came from, restarting their machine, or finding it in Task Manager
+(outside this sandbox they have full access) will clear it; `uvicorn
+server:app --reload --port 8001` (or any other port) is a fine workaround
+either way.
 
 ## Notes / gotchas hit during build
 - Groq SDK 0.11.0 is incompatible with httpx>=0.28 (`proxies` kwarg error).

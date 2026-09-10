@@ -1,14 +1,56 @@
+import { useState } from 'react'
 import { motion, useReducedMotion } from 'motion/react'
 import {
   ArrowSquareOut,
+  CaretDown,
   EnvelopeSimple,
   Lightning,
   LinkedinLogo,
+  ShieldCheck,
   WarningCircle,
 } from '@phosphor-icons/react'
 import PendingCard from './PendingCard'
 import StatusPill from './StatusPill'
 import { bareUrl, initials, statusMeta } from '../lib/format'
+
+function SourceProof({ record }) {
+  const [open, setOpen] = useState(false)
+  const verifiableCount = (record.contact_emails?.length || 0) + (record.leadership?.length || 0)
+  const hasIssues = record.critique_notes?.length > 0
+
+  if (!record.source_text) return null
+
+  return (
+    <div className="mt-5 border-t border-border-soft pt-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {verifiableCount > 0 && !hasIssues ? (
+          <span className="inline-flex items-center gap-1.5 text-[13px] text-success">
+            <ShieldCheck size={15} />
+            {verifiableCount} field{verifiableCount === 1 ? '' : 's'} confirmed present in the scraped source below --
+            not just the model's word for it.
+          </span>
+        ) : (
+          <span className="text-[13px] text-ink-faint">
+            Every field above is checked against the scraped source below before it's shown.
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs font-medium text-ink-muted transition hover:border-accent hover:text-accent"
+        >
+          <CaretDown size={12} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+          {open ? 'Hide' : 'View'} scraped source
+        </button>
+      </div>
+      {open && (
+        <pre className="mt-3 max-h-64 overflow-y-auto rounded-[var(--radius-md)] bg-bg p-4 font-mono text-[12px] leading-relaxed whitespace-pre-wrap text-ink-muted">
+          {record.source_text}
+        </pre>
+      )}
+    </div>
+  )
+}
 
 function FieldLabel({ children }) {
   return <span className="text-[11.5px] font-semibold tracking-wide text-ink-faint uppercase">{children}</span>
@@ -167,6 +209,8 @@ export default function ResultCard({ record, index }) {
               </ul>
             </div>
           )}
+
+          <SourceProof record={record} />
         </>
       )}
     </motion.article>

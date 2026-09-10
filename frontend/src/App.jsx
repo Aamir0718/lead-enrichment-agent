@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { Tray, WarningCircle } from '@phosphor-icons/react'
 import Header from './components/Header'
 import RunForm from './components/RunForm'
+import ConsolePanel from './components/ConsolePanel'
 import StatsBar from './components/StatsBar'
 import ResultCard from './components/ResultCard'
 import { useEnrichment } from './hooks/useEnrichment'
@@ -27,7 +28,7 @@ function ErrorBanner({ message }) {
 }
 
 export default function App() {
-  const { records, phase, error, progress, submitDomains } = useEnrichment()
+  const { records, phase, error, progress, logs, submitDomains } = useEnrichment()
 
   const completed = useMemo(() => records.filter((r) => !r.pending), [records])
 
@@ -74,6 +75,8 @@ export default function App() {
         </section>
 
         <RunForm onSubmit={submitDomains} isRunning={phase === 'running'} progress={progress} />
+
+        <ConsolePanel logs={logs} isRunning={phase === 'running'} />
 
         {phase === 'error' && <ErrorBanner message={error} />}
 

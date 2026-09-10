@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -28,7 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from graph import run_pipeline
+from graph import stream_pipeline
 from models import CompanyIntel
 
 load_dotenv()
@@ -71,17 +72,27 @@ class EnrichRequest(BaseModel):
 
 class Job:
     """Tracks one enrichment run. Results fill in per-domain as they finish
-    so the frontend can render cards progressively, not just at the end."""
+    so the frontend can render cards progressively, not just at the end.
+    `logs` is the same step-by-step trail main.py prints to the console,
+    captured here so the browser has the same visibility into what's
+    actually happening instead of a silent spinner."""
 
     def __init__(self, domains: list[str]):
         self.id = uuid.uuid4().hex
         self.order = domains
         self.status = "running"  # running | done
         self.results: dict[str, CompanyIntel] = {}
+        self.logs: list[dict] = []
 
 
 _jobs: dict[str, Job] = {}
 _jobs_lock = threading.Lock()
+
+
+def _log(job: Job, message: str) -> None:
+    with _jobs_lock:
+        job.logs.append({"ts": time.time(), "message": message})
+    logger.info("Job %s: %s", job.id, message)
 
 
 def _execute_job(job: Job) -> None:
@@ -92,14 +103,23 @@ def _execute_job(job: Job) -> None:
     thread (not an asyncio task) sidesteps that entirely.
     """
     for domain in job.order:
+        intel: Optional[CompanyIntel] = None
         try:
-            intel = run_pipeline(domain)
+            for event in stream_pipeline(domain):
+                if event["type"] == "log":
+                    _log(job, f"[{domain}] {event['message']}")
+                else:
+                    intel = event["result"]
         except Exception as exc:  # noqa: BLE001 -- one bad domain must never kill the job
             logger.exception("Unexpected error processing %s", domain)
+            _log(job, f"[{domain}] Unexpected error: {exc}")
             intel = CompanyIntel(domain=domain, status="failed", error=f"Unexpected error: {exc}")
+
+        if intel is None:
+            intel = CompanyIntel(domain=domain, status="failed", error="Pipeline produced no result")
+
         with _jobs_lock:
             job.results[domain] = intel
-        logger.info("Job %s: %s -> %s", job.id, domain, intel.status)
 
     with _jobs_lock:
         job.status = "done"
@@ -134,6 +154,7 @@ def get_enrich_status(job_id: str):
             "completed": len(results),
             "total": len(job.order),
             "results": results,
+            "logs": list(job.logs),
         }
 
 

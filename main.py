@@ -29,7 +29,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
 
-from graph import run_pipeline
+from graph import stream_pipeline
 from models import CompanyIntel
 
 load_dotenv()
@@ -45,19 +45,30 @@ OUTPUT_PATH = Path(__file__).parent / "output.json"
 
 
 def run_domain(domain: str) -> CompanyIntel:
-    """Run the LangGraph pipeline for a single domain. Never raises."""
+    """Run the LangGraph pipeline for a single domain, logging every step
+    as it happens (not just a start/done line) -- this is the CLI's proof
+    of what the agent actually did. Never raises."""
     logger.info("=== Processing %s ===", domain)
+    intel: CompanyIntel | None = None
     try:
-        intel = run_pipeline(domain)
-        logger.info(
-            "Done %s: status=%s confidence=%.2f emails=%d leadership=%d llm_calls=%d",
-            intel.domain, intel.status, intel.confidence_score,
-            len(intel.contact_emails), len(intel.leadership), intel.llm_calls_used,
-        )
-        return intel
+        for event in stream_pipeline(domain):
+            if event["type"] == "log":
+                logger.info("  %s", event["message"])
+            else:
+                intel = event["result"]
     except Exception as exc:  # noqa: BLE001 -- last-resort guard so one domain never kills the batch
         logger.exception("Unexpected error processing %s", domain)
         return CompanyIntel(domain=domain, status="failed", error=f"Unexpected error: {exc}")
+
+    if intel is None:
+        return CompanyIntel(domain=domain, status="failed", error="Pipeline produced no result")
+
+    logger.info(
+        "Done %s: status=%s confidence=%.2f emails=%d leadership=%d llm_calls=%d",
+        intel.domain, intel.status, intel.confidence_score,
+        len(intel.contact_emails), len(intel.leadership), intel.llm_calls_used,
+    )
+    return intel
 
 
 def main() -> None:

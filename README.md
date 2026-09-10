@@ -108,6 +108,26 @@ terminal and (`cd frontend`, then `npm run dev`) in another -- Vite's dev
 server proxies `/api/*` to port 8000 (see `frontend/vite.config.js`), so
 the app behaves identically to production.
 
+## Proof, not just a spinner
+
+Two things exist specifically so you're never just told to trust the
+output:
+
+- **Live activity log.** Both the CLI and the web app stream a line after
+  every node finishes -- e.g. `Scraper: fetched homepage + 1 subpage(s)`,
+  `Critique: verified 2 email(s) and 3 leader(s) against the scraped
+  source -- nothing dropped`. In the browser this renders as a "Live
+  activity" console under the run form. In the terminal it's the same
+  messages through the normal logger. Source: `graph.stream_pipeline()`
+  (see below) -- neither `main.py` nor `server.py` invents these messages,
+  they just relay what each node actually returned.
+- **Source text attached to every result.** `CompanyIntel.source_text`
+  carries the exact cleaned text the Extractor Agent was given for that
+  domain, so any claim (an email, a name, the overview) can be checked
+  against it directly. The frontend exposes this as a "View scraped
+  source" disclosure on each card, with a note on whether the Critique
+  Agent found everything verifiable or had to drop something.
+
 ## Setup (CLI / scripted use)
 
 Same `pip install` / `playwright install` / `.env` steps as above (see the
@@ -150,7 +170,8 @@ above is the intended way to run it.
   "confidence_score": 0.75,
   "critique_notes": [],
   "pages_scraped": ["https://postman.com", "https://postman.com/company"],
-  "llm_calls_used": 1
+  "llm_calls_used": 1,
+  "source_text": "--- Source: https://postman.com ---\n..."
 }
 ```
 
@@ -177,7 +198,8 @@ frontend/             Vite + React app (talks to server.py's API)
   src/hooks/useEnrichment.js  Loads last results, submits runs, polls job status
   src/lib/api.js          Fetch wrappers for /api/*
   src/lib/format.js        Formatting + progress-merging helpers
-  src/components/          Header, RunForm, StatsBar, ResultCard, PendingCard, StatusPill
+  src/components/          Header, RunForm, ConsolePanel, StatsBar, ResultCard
+                            (with the source-proof disclosure), PendingCard, StatusPill
 ```
 
 ## Notes on resilience

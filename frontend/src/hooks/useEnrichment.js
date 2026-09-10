@@ -15,6 +15,7 @@ export function useEnrichment() {
   const [phase, setPhase] = useState('loading') // loading | idle | running | error
   const [error, setError] = useState(null)
   const [progress, setProgress] = useState(null)
+  const [logs, setLogs] = useState([])
   const pollTimeoutRef = useRef(null)
 
   const stopPolling = useCallback(() => {
@@ -48,6 +49,7 @@ export function useEnrichment() {
       .then((data) => {
         setRecords(mergeProgress(domains, data.results))
         setProgress({ completed: data.completed, total: data.total })
+        setLogs(data.logs || [])
         if (data.status === 'done') {
           setPhase('idle')
           setProgress(null)
@@ -68,6 +70,7 @@ export function useEnrichment() {
       setPhase('running')
       setProgress({ completed: 0, total: domains.length })
       setRecords(mergeProgress(domains, []))
+      setLogs([])
       startEnrich(domains)
         .then((data) => pollJob(data.job_id, data.domains))
         .catch((err) => {
@@ -78,5 +81,5 @@ export function useEnrichment() {
     [pollJob, stopPolling],
   )
 
-  return { records, phase, error, progress, submitDomains }
+  return { records, phase, error, progress, logs, submitDomains }
 }
