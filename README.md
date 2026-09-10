@@ -67,11 +67,27 @@ The intended way to use this project day-to-day: start one process, then do
 everything else -- enter domains, run the pipeline, watch results appear,
 download the JSON -- from the browser.
 
+macOS/Linux (bash):
+
 ```bash
 pip install -r requirements.txt
 playwright install chromium
 cp .env.example .env              # add your GROQ_API_KEY
 cd frontend && npm install && npm run build && cd ..
+uvicorn server:app --reload
+```
+
+Windows (PowerShell -- run one line at a time; PowerShell 5.1 doesn't
+support `&&` as a statement separator):
+
+```powershell
+pip install -r requirements.txt
+playwright install chromium
+Copy-Item .env.example .env       # add your GROQ_API_KEY
+cd frontend
+npm install
+npm run build
+cd ..
 uvicorn server:app --reload
 ```
 
@@ -88,34 +104,18 @@ polling, `GET /api/results`) and serves the built frontend from the same
 process, so there's exactly one thing to start.
 
 **Developing the frontend?** Run `uvicorn server:app --reload` in one
-terminal and `cd frontend && npm run dev` in another -- Vite's dev server
-proxies `/api/*` to port 8000 (see `frontend/vite.config.js`), so the app
-behaves identically to production.
+terminal and (`cd frontend`, then `npm run dev`) in another -- Vite's dev
+server proxies `/api/*` to port 8000 (see `frontend/vite.config.js`), so
+the app behaves identically to production.
 
 ## Setup (CLI / scripted use)
 
-1. **Install dependencies**
+Same `pip install` / `playwright install` / `.env` steps as above (see the
+bash or PowerShell block in the previous section) -- then:
 
-   ```bash
-   pip install -r requirements.txt
-   playwright install chromium
-   ```
-
-2. **Configure environment variables**
-
-   Copy `.env.example` to `.env` and add your Groq API key (free tier
-   available at https://console.groq.com/keys):
-
-   ```bash
-   cp .env.example .env
-   # then edit .env and set GROQ_API_KEY=...
-   ```
-
-3. **Run**
-
-   ```bash
-   python main.py
-   ```
+```bash
+python main.py
+```
 
    This runs the pipeline against the default test domains
    (`postman.com`, `supabase.com`, `vapi.ai`) and writes `output.json`.
