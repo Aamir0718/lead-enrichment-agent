@@ -83,6 +83,7 @@ HTML_TEMPLATE = """<!doctype html>
   .brand-text{ display:flex; flex-direction:column; line-height:1.25; }
   .brand-name{ font-weight:600; font-size:15px; }
   .brand-sub{ font-size:13px; color:var(--text-tertiary); }
+  .header-actions{ display:flex; align-items:center; gap:10px; }
   .repo-link{
     display:inline-flex; align-items:center; gap:8px;
     background:var(--accent); color:#fff; font-size:14px; font-weight:500;
@@ -91,6 +92,16 @@ HTML_TEMPLATE = """<!doctype html>
   .repo-link:hover{ opacity:0.9; }
   .repo-link:active{ transform:scale(0.98); }
   .repo-link i{ font-size:16px; }
+  .download-btn{
+    display:inline-flex; align-items:center; gap:8px;
+    background:var(--surface); color:var(--accent);
+    border:1px solid var(--border); font-size:14px; font-weight:500;
+    padding:9px 16px; border-radius:999px; cursor:pointer;
+    font-family:var(--font-sans); transition:transform .15s ease, border-color .15s ease;
+  }
+  .download-btn:hover{ border-color:var(--accent); }
+  .download-btn:active{ transform:scale(0.98); }
+  .download-btn i{ font-size:16px; }
 
   /* Intro */
   .intro{ padding-block:48px 32px; max-width:640px; }
@@ -219,9 +230,14 @@ HTML_TEMPLATE = """<!doctype html>
         <span class="brand-sub">Autonomous company intelligence pipeline</span>
       </div>
     </div>
-    <a class="repo-link" href="__REPO_URL__" target="_blank" rel="noopener">
-      <i class="ph ph-github-logo"></i> View repository
-    </a>
+    <div class="header-actions">
+      <button class="download-btn" type="button" id="download-json">
+        <i class="ph ph-download-simple"></i> Download JSON
+      </button>
+      <a class="repo-link" href="__REPO_URL__" target="_blank" rel="noopener">
+        <i class="ph ph-github-logo"></i> View repository
+      </a>
+    </div>
   </div>
 </header>
 
@@ -252,6 +268,21 @@ HTML_TEMPLATE = """<!doctype html>
 (function(){
   const records = JSON.parse(document.getElementById('report-data').textContent);
   const container = document.getElementById('cards');
+
+  const downloadBtn = document.getElementById('download-json');
+  if (downloadBtn){
+    downloadBtn.addEventListener('click', function(){
+      const blob = new Blob([JSON.stringify(records, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'output.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    });
+  }
 
   function escapeHtml(str){
     const div = document.createElement('div');
