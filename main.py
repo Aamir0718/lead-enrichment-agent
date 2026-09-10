@@ -28,6 +28,7 @@ from agents.critique import critique
 from agents.extractor import extract
 from agents.processor import process_pages
 from agents.scraper import scrape_domain
+from generate_report import generate_report
 from models import CompanyIntel
 
 load_dotenv()
@@ -124,6 +125,11 @@ def main() -> None:
         encoding="utf-8",
     )
     logger.info("Wrote results to %s", OUTPUT_PATH)
+
+    try:
+        generate_report()
+    except Exception:  # noqa: BLE001 -- the HTML report is a nice-to-have, never let it fail the run
+        logger.exception("Report generation failed (output.json was still written successfully)")
 
     total_llm_calls = sum(r.llm_calls_used for r in results)
     print("\n=== Run Summary ===")

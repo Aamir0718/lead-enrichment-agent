@@ -3,15 +3,15 @@
     "domain": "postman.com",
     "status": "success",
     "error": null,
-    "company_overview": "Postman provides an API platform that lets users design, test, manage, and distribute APIs and services. It streamlines every stage of the API lifecycle and enables collaboration for faster, higher\u2011quality API development.",
-    "target_audience": "Engineers and developers building, testing, and managing APIs, especially teams and enterprises that need end\u2011to\u2011end API lifecycle support.",
+    "company_overview": "Postman provides an API platform that lets users design, test, manage, and distribute APIs throughout the entire API lifecycle. It streamlines collaboration and adds governance, AI\u2011assisted features, and enterprise\u2011scale capabilities.",
+    "target_audience": "Engineers and developers building, testing, and operating APIs and services, especially within enterprise environments.",
     "contact_emails": [
       "help@postman.com"
     ],
     "leadership": [
       {
         "name": "Abhinav Asthana",
-        "role": "CEO and Co\u2011founder",
+        "role": "CEO and co\u2011founder",
         "linkedin_url": null
       },
       {
@@ -25,7 +25,7 @@
         "linkedin_url": null
       }
     ],
-    "confidence_score": 0.92,
+    "confidence_score": 0.9,
     "critique_notes": [],
     "pages_scraped": [
       "https://postman.com",
@@ -40,11 +40,11 @@
     "domain": "supabase.com",
     "status": "success",
     "error": null,
-    "company_overview": "Supabase provides a fully managed Postgres\u2011based development platform that bundles a database, authentication, auto\u2011generated APIs, realtime sync, storage, edge functions, and vector search. It enables developers to launch and scale applications quickly without managing infrastructure.",
-    "target_audience": "Developers building web, mobile, or AI applications who need a complete Postgres backend with auth, APIs, storage, and serverless functions.",
+    "company_overview": "Supabase provides an open\u2011source Postgres\u2011based development platform that offers a managed database, authentication, realtime, storage, edge functions and vector search as a unified backend. It enables developers to launch full\u2011stack applications quickly and scale them to production\u2011grade workloads.",
+    "target_audience": "Developers and teams building web, mobile or AI\u2011powered applications\u2014including startups, enterprises and innovation teams\u2014who need a ready\u2011to\u2011use Postgres backend with integrated services.",
     "contact_emails": [],
     "leadership": [],
-    "confidence_score": 0.5,
+    "confidence_score": 0.75,
     "critique_notes": [],
     "pages_scraped": [
       "https://supabase.com",
@@ -59,8 +59,8 @@
     "domain": "vapi.ai",
     "status": "success",
     "error": null,
-    "company_overview": "Vapi offers an open voice\u2011agent platform that lets businesses build, deploy, and continuously improve advanced voice AI agents at enterprise scale.",
-    "target_audience": "Enterprises and developers building voice AI agents for customer support, lead qualification, appointment scheduling, and other use cases.",
+    "company_overview": "Vapi provides a platform for building, deploying, and managing advanced voice AI agents that handle calls, support, and other interactions. The service offers enterprise\u2011grade infrastructure, real\u2011time monitoring, and compliance features such as SOC\u202f2, HIPAA, and PCI.",
+    "target_audience": "Enterprises and developers building voice\u2011based AI agents for customer support, lead qualification, appointment scheduling, and other call\u2011center use cases.",
     "contact_emails": [],
     "leadership": [
       {
@@ -69,7 +69,7 @@
         "linkedin_url": null
       }
     ],
-    "confidence_score": 0.66,
+    "confidence_score": 0.67,
     "critique_notes": [],
     "pages_scraped": [
       "https://vapi.ai",

@@ -52,8 +52,15 @@ Groq (free/cheap tier) — user will supply GROQ_API_KEY in .env.
 - [x] README.md
 - [x] Run against 3 test domains, produce output.json (all 3: status=success,
       3 total LLM calls, 0 retries needed, 0 hallucinations flagged by critique)
+- [x] Pushed to GitHub: https://github.com/Aamir0718/lead-enrichment-agent
+- [x] Added generate_report.py -> report.html: light, premium static results
+      page (Geist/Geist Mono via Google Fonts, Phosphor icons, single cobalt
+      accent, no dark mode by explicit user request). Auto-runs at the end
+      of main.py; also runnable standalone. Verified visually via Playwright
+      screenshots at desktop (1280px) and mobile (390px) widths -- responsive,
+      cards render correctly, scroll-reveal animation works as intended.
 - [ ] User records Loom walkthrough (their side)
-- [ ] Push to GitHub, submit email to support@softwarebrio.com
+- [ ] Submit email to support@softwarebrio.com
 
 ## Notes / gotchas hit during build
 - Groq SDK 0.11.0 is incompatible with httpx>=0.28 (`proxies` kwarg error).

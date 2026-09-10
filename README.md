@@ -70,6 +70,18 @@ message instead.
    python main.py example.com another-company.com
    ```
 
+## Viewing results
+
+`main.py` automatically generates `report.html` alongside `output.json` -- a
+light, static results page (no server needed, just open it in a browser)
+that shows each domain's extracted data as a readable card: overview, ICP,
+contact emails, leadership, confidence score, and run-level stats. Safe to
+re-run standalone any time output.json changes:
+
+```bash
+python generate_report.py
+```
+
 ## Output format
 
 `output.json` is a list of objects, one per domain:
@@ -105,9 +117,11 @@ agents/
   processor.py         Processor Agent -- HTML cleaning + email regex, no LLM
   extractor.py         Extractor Agent -- the only LLM call in the normal path
   critique.py           Critique Agent -- deterministic hallucination/QA check
+generate_report.py    Renders output.json into report.html (no LLM)
 requirements.txt
 .env.example
 output.json           Sample output from a run against the 3 test domains
+report.html            Sample results page generated from output.json
 ```
 
 ## Notes on resilience
