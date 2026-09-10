@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+/* Design tokens -- light theme only (explicit product decision, no dark
+   mode branch). Naming avoids the "text-" prefix on text-color tokens so
+   the generated Tailwind utilities read cleanly (text-ink, not
+   text-text-primary). */
+@theme {
+  --font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', 'Cascadia Code', 'Roboto Mono', monospace;
+
+  --color-bg: #FAFAFA;
+  --color-surface: #FFFFFF;
+  --color-border: #E5E5E9;
+  --color-border-soft: #EEEEF1;
+
+  --color-ink: #16181D;
+  --color-ink-muted: #5B5F6B;
+  --color-ink-faint: #9A9DA6;
+
+  --color-accent: #2952E3;
+  --color-accent-soft: #EEF1FD;
+
+  --color-success: #1E8E5A;
+  --color-success-soft: #E9F7EF;
+  --color-warning: #B7791F;
+  --color-warning-soft: #FBF3E6;
+  --color-danger: #C23B3B;
+  --color-danger-soft: #FBEAEA;
+
+  --radius-lg: 20px;
+  --radius-md: 12px;
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}

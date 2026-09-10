@@ -30,6 +30,11 @@ strict minimum for cost reasons:
 
 Worst case: 2 LLM calls/domain. Typical: 1. Total for 3 domains: 3-6 calls.
 
+**Update:** orchestration (step 5, and the control flow linking 1-4) is now
+implemented as a LangGraph `StateGraph` (see `graph.py`) instead of plain
+Python if/else -- same 5-agent architecture, same LLM-call budget, just a
+real graph with conditional edges for the retry loop. See Status below.
+
 ## Provider
 Groq (free/cheap tier) — user will supply GROQ_API_KEY in .env.
 
@@ -53,12 +58,27 @@ Groq (free/cheap tier) — user will supply GROQ_API_KEY in .env.
 - [x] Run against 3 test domains, produce output.json (all 3: status=success,
       3 total LLM calls, 0 retries needed, 0 hallucinations flagged by critique)
 - [x] Pushed to GitHub: https://github.com/Aamir0718/lead-enrichment-agent
-- [x] Added generate_report.py -> report.html: light, premium static results
-      page (Geist/Geist Mono via Google Fonts, Phosphor icons, single cobalt
-      accent, no dark mode by explicit user request). Auto-runs at the end
-      of main.py; also runnable standalone. Verified visually via Playwright
-      screenshots at desktop (1280px) and mobile (390px) widths -- responsive,
-      cards render correctly, scroll-reveal animation works as intended.
+- [x] Added generate_report.py -> report.html (static HTML results page).
+      SUPERSEDED -- removed once the React frontend shipped (see below).
+- [x] Refactored orchestration onto LangGraph (user request, forgot to
+      mention at the start): new graph.py builds a LangGraph StateGraph
+      wiring the same four agents (scrape -> process -> extract -> critique,
+      with a conditional retry edge back to extract). agents/*.py unchanged
+      -- same architecture, just a real graph instead of hand-rolled
+      if/else in main.py. Verified: same 1-call-typical / 2-call-worst-case
+      LLM budget, all 3 domains still succeed.
+- [x] Replaced report.html with a proper React frontend (user request):
+      frontend/ is a Vite + React app (Tailwind v4 via @tailwindcss/vite,
+      Motion for scroll-reveal, @phosphor-icons/react, Geist/Geist Mono).
+      Same visual design as the old static report (light theme, cobalt
+      accent, card layout, Download JSON button) but componentized
+      (Header/StatsBar/ResultCard/StatusPill). main.py syncs output.json
+      into frontend/src/data/output.json after every run.
+      Verified via Playwright against `npm run preview` (production build
+      won't run off file:// -- ES module CORS restriction in all browsers,
+      not a bug -- documented in both READMEs): 3 cards render, 0 console
+      errors, download button produces a real 3-record output.json.
+- [x] Updated root README.md and frontend/README.md for both changes.
 - [ ] User records Loom walkthrough (their side)
 - [ ] Submit email to support@softwarebrio.com
 

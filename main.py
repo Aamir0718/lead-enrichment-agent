@@ -1,8 +1,9 @@
 """Main Agent / orchestrator.
 
-Runs the full pipeline (Scraper -> Processor -> Extractor -> Critique) for
-each input domain, aggregates results, and writes output.json. A failure on
-any single domain is caught and recorded -- it never stops the batch.
+Runs the LangGraph pipeline (Scraper -> Processor -> Extractor -> Critique,
+see graph.py) for each input domain, aggregates results, and writes
+output.json. A failure on any single domain is caught and recorded -- it
+never stops the batch.
 
 Usage:
     python main.py                          # runs the 3 default test domains
@@ -12,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import sys
 from pathlib import Path
 
@@ -24,11 +26,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
 
-from agents.critique import critique
-from agents.extractor import extract
-from agents.processor import process_pages
-from agents.scraper import scrape_domain
-from generate_report import generate_report
+from graph import run_pipeline
 from models import CompanyIntel
 
 load_dotenv()
@@ -41,77 +39,30 @@ logger = logging.getLogger("main")
 
 DEFAULT_DOMAINS = ["postman.com", "supabase.com", "vapi.ai"]
 OUTPUT_PATH = Path(__file__).parent / "output.json"
+FRONTEND_DATA_PATH = Path(__file__).parent / "frontend" / "src" / "data" / "output.json"
 
 
 def run_domain(domain: str) -> CompanyIntel:
-    """Run the full pipeline for a single domain. Never raises."""
+    """Run the LangGraph pipeline for a single domain. Never raises."""
     logger.info("=== Processing %s ===", domain)
-    intel = CompanyIntel(domain=domain)
-
     try:
-        # --- Stage 1: Scraper Agent (deterministic) ---
-        scrape_result = scrape_domain(domain)
-        intel.pages_scraped = list(scrape_result.pages.keys())
-        if not scrape_result.ok:
-            intel.status = "failed"
-            intel.error = "; ".join(scrape_result.errors) or "No pages could be fetched"
-            logger.warning("Scrape failed for %s: %s", domain, intel.error)
-            return intel
-
-        # --- Stage 2: Processor Agent (deterministic) ---
-        processed = process_pages(scrape_result.pages)
-
-        # --- Stage 3: Extractor Agent (LLM, call #1) ---
-        result, err = extract(domain, processed.combined_text)
-        intel.llm_calls_used += 1
-        if err or result is None:
-            intel.status = "failed"
-            intel.error = err
-            logger.warning("Extraction failed for %s: %s", domain, err)
-            return intel
-
-        # --- Stage 4: Critique Agent (deterministic, may trigger 1 retry) ---
-        outcome = critique(result, processed.combined_text)
-
-        if outcome.needs_retry:
-            logger.info("Critique requested one retry for %s: %s", domain, outcome.retry_feedback)
-            retry_result, retry_err = extract(domain, processed.combined_text, feedback=outcome.retry_feedback)
-            intel.llm_calls_used += 1
-            if retry_result is not None:
-                result = retry_result
-                outcome = critique(result, processed.combined_text)  # re-validate, no further retries allowed
-            else:
-                outcome.notes.append(f"Retry also failed: {retry_err}")
-
-        intel.company_overview = result.company_overview
-        intel.target_audience = result.target_audience
-        intel.contact_emails = outcome.cleaned_emails
-        intel.leadership = outcome.cleaned_leadership
-        intel.confidence_score = outcome.confidence_score
-        intel.critique_notes = outcome.notes
-
-        has_overview = bool(intel.company_overview and intel.company_overview.strip())
-        has_audience = bool(intel.target_audience and intel.target_audience.strip())
-        if has_overview and has_audience:
-            intel.status = "success"
-        elif has_overview or has_audience:
-            intel.status = "partial"
-        else:
-            intel.status = "failed"
-            intel.error = intel.error or "Usable overview/ICP could not be extracted after retry"
-
+        intel = run_pipeline(domain)
         logger.info(
             "Done %s: status=%s confidence=%.2f emails=%d leadership=%d llm_calls=%d",
-            domain, intel.status, intel.confidence_score,
+            intel.domain, intel.status, intel.confidence_score,
             len(intel.contact_emails), len(intel.leadership), intel.llm_calls_used,
         )
-
+        return intel
     except Exception as exc:  # noqa: BLE001 -- last-resort guard so one domain never kills the batch
         logger.exception("Unexpected error processing %s", domain)
-        intel.status = "failed"
-        intel.error = f"Unexpected error: {exc}"
+        return CompanyIntel(domain=domain, status="failed", error=f"Unexpected error: {exc}")
 
-    return intel
+
+def sync_frontend_data() -> None:
+    """Copy output.json into the React app so it always reflects the latest run."""
+    FRONTEND_DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(OUTPUT_PATH, FRONTEND_DATA_PATH)
+    logger.info("Synced results to %s", FRONTEND_DATA_PATH)
 
 
 def main() -> None:
@@ -127,9 +78,9 @@ def main() -> None:
     logger.info("Wrote results to %s", OUTPUT_PATH)
 
     try:
-        generate_report()
-    except Exception:  # noqa: BLE001 -- the HTML report is a nice-to-have, never let it fail the run
-        logger.exception("Report generation failed (output.json was still written successfully)")
+        sync_frontend_data()
+    except Exception:  # noqa: BLE001 -- frontend sync is a nice-to-have, never let it fail the run
+        logger.exception("Could not sync output.json into frontend/ (output.json itself was still written)")
 
     total_llm_calls = sum(r.llm_calls_used for r in results)
     print("\n=== Run Summary ===")
