@@ -79,6 +79,28 @@ Groq (free/cheap tier) — user will supply GROQ_API_KEY in .env.
       not a bug -- documented in both READMEs): 3 cards render, 0 console
       errors, download button produces a real 3-record output.json.
 - [x] Updated root README.md and frontend/README.md for both changes.
+- [x] Turned it into a real app (user request: "no terminal needed except
+      to start it, should be like an application"): new server.py (FastAPI)
+      wraps graph.run_pipeline() behind POST /api/enrich (starts a
+      background-thread job), GET /api/enrich/{job_id} (poll, returns
+      results incrementally as each domain finishes), GET /api/results
+      (last completed run), and serves frontend/dist as static files so one
+      `uvicorn server:app` process is the whole product.
+      Frontend: added RunForm (domain textarea + Run button), useEnrichment
+      hook (loads last results on mount, submits runs, polls every 1.2s),
+      PendingCard (skeleton with animated "Processing"/"Queued" status pill
+      for domains not yet done -- pipeline runs domains in order so at most
+      one is ever "Processing"), empty state, and an error banner if the
+      API can't be reached. Removed frontend/src/data/output.json (static
+      bundled copy) and main.py's sync step -- no longer needed now that
+      the frontend fetches live from the API.
+      Verified via Playwright against the real server (not just the build):
+      loaded last run's 3 results on page load, submitted a live 1-domain
+      run through the actual UI, watched the processing skeleton appear,
+      confirmed it resolved to a correct real result card with stats
+      updating -- 0 console errors throughout. Re-ran the CLI afterward to
+      restore the full 3-domain output.json (the live UI test had
+      overwritten it with a 1-domain run).
 - [ ] User records Loom walkthrough (their side)
 - [ ] Submit email to support@softwarebrio.com
 

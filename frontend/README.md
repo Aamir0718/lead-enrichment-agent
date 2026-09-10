@@ -1,8 +1,9 @@
 # Lead Enrichment Agent -- Frontend
 
-Vite + React results viewer for the [Lead Enrichment Agent](../README.md)
-pipeline. Renders `src/data/output.json` (kept in sync automatically by
-`../main.py` after every pipeline run) as a light, premium results page.
+Vite + React app for the [Lead Enrichment Agent](../README.md) pipeline.
+Lets you enter company domains, run the pipeline, and watch structured
+results appear -- entirely from the browser, talking to `../server.py`'s
+API (`/api/enrich`, `/api/enrich/{job_id}`, `/api/results`).
 
 ## Stack
 
@@ -15,33 +16,41 @@ pipeline. Renders `src/data/output.json` (kept in sync automatically by
 
 ## Run it
 
+Needs `../server.py` running (`uvicorn server:app --reload` from the repo
+root) for the API calls to resolve.
+
 ```bash
 npm install
-npm run dev
+npm run dev        # Vite dev server, proxies /api/* to localhost:8000
 ```
 
 ## Build it
 
 ```bash
-npm run build     # -> dist/
-npm run preview   # serves dist/ locally so you can view the production build
+npm run build     # -> dist/, served by server.py in production
+npm run preview   # serves dist/ locally to check the production build
 ```
 
-`dist/index.html` must be served (`npm run preview` or any static file
-server), not opened directly via `file://` -- browsers block ES module
-scripts on the `file://` origin. This applies to any Vite/webpack app, not
-just this one.
+`dist/index.html` must be served (`npm run preview`, `server.py`, or any
+static file server), not opened directly via `file://` -- browsers block ES
+module scripts on the `file://` origin. This applies to any Vite/webpack
+app, not just this one.
 
 ## Structure
 
 ```
 src/
-  App.jsx              Page layout + run-level summary stats
+  App.jsx              Page layout: run form, stats, results, empty/error states
+  hooks/
+    useEnrichment.js    Loads last results on mount, submits new runs, polls job status
+  lib/
+    api.js               fetch wrappers for /api/enrich, /api/enrich/{id}, /api/results
+    format.js             initials/URL helpers, status labels, progress-merging
   components/
-    Header.jsx          Brand, Download JSON button, repo link
-    StatsBar.jsx          Domains / success rate / avg confidence / LLM calls
-    ResultCard.jsx         Per-domain card: overview, ICP, emails, leadership, pages, critique notes
-    StatusPill.jsx          Success / partial / failed badge
-  lib/format.js         Small formatting helpers (initials, bare URL, status meta)
-  data/output.json      Synced copy of the pipeline's output.json
+    Header.jsx           Brand, Download JSON button, repo link
+    RunForm.jsx            Domain input + Run button + inline validation
+    StatsBar.jsx            Domains / success rate / avg confidence / LLM calls
+    ResultCard.jsx           Per-domain card: overview, ICP, emails, leadership, pages, critique notes
+    PendingCard.jsx           Skeleton card shown for a domain still processing/queued
+    StatusPill.jsx            Success / partial / failed / processing / queued badge
 ```

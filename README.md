@@ -4,8 +4,10 @@ A pipeline that takes a list of company domains, crawls their public web
 presence with a headless browser, and uses an LLM to extract structured
 company intelligence: overview, target audience/ICP, public contact emails,
 leadership team, and a data confidence score. Orchestrated as a
-[LangGraph](https://github.com/langchain-ai/langgraph) state graph, with a
-React results viewer.
+[LangGraph](https://github.com/langchain-ai/langgraph) state graph, usable
+either as a CLI script or as a full app -- a FastAPI backend plus a React
+frontend where you enter domains and watch results appear, no terminal
+needed beyond starting the one process.
 
 ## Architecture
 
@@ -59,7 +61,38 @@ The agent modules themselves (`agents/scraper.py`, `processor.py`,
 functions could be re-wired into a different graph shape without touching
 their internals.
 
-## Setup (backend)
+## Run it as an app (no terminal after this)
+
+The intended way to use this project day-to-day: start one process, then do
+everything else -- enter domains, run the pipeline, watch results appear,
+download the JSON -- from the browser.
+
+```bash
+pip install -r requirements.txt
+playwright install chromium
+cp .env.example .env              # add your GROQ_API_KEY
+cd frontend && npm install && npm run build && cd ..
+uvicorn server:app --reload
+```
+
+Then open **http://localhost:8000**. Type domains into the form, click
+**Run agent**, and cards fill in live as each domain finishes (the pipeline
+still runs domains one at a time, so you'll see a "Processing" skeleton
+card, then queued placeholders, resolve into real results). Reloading the
+page always shows whatever the last run produced, via `GET /api/results`.
+
+`server.py` wraps the exact same `graph.run_pipeline()` the CLI uses --
+same agents, same 4-node LangGraph, same 1-call-per-domain LLM budget. It
+just adds an HTTP layer (`POST /api/enrich`, `GET /api/enrich/{job_id}` for
+polling, `GET /api/results`) and serves the built frontend from the same
+process, so there's exactly one thing to start.
+
+**Developing the frontend?** Run `uvicorn server:app --reload` in one
+terminal and `cd frontend && npm run dev` in another -- Vite's dev server
+proxies `/api/*` to port 8000 (see `frontend/vite.config.js`), so the app
+behaves identically to production.
+
+## Setup (CLI / scripted use)
 
 1. **Install dependencies**
 
@@ -85,8 +118,9 @@ their internals.
    ```
 
    This runs the pipeline against the default test domains
-   (`postman.com`, `supabase.com`, `vapi.ai`), writes `output.json`, and
-   syncs a copy into `frontend/src/data/output.json` for the React app.
+   (`postman.com`, `supabase.com`, `vapi.ai`) and writes `output.json`.
+   `server.py` (see above) will pick up this same file via `GET
+   /api/results` next time it's running, no extra step needed.
 
    To run against your own domains instead:
 
@@ -94,31 +128,9 @@ their internals.
    python main.py example.com another-company.com
    ```
 
-## Setup (frontend)
-
-The `frontend/` directory is a Vite + React app that renders `output.json`
-as a light, premium results page (Geist / Geist Mono typography, a single
-accent color, per-domain cards, and a Download JSON button). It reads
-whatever is currently in `frontend/src/data/output.json`, which `main.py`
-keeps in sync automatically after every run.
-
-```bash
-cd frontend
-npm install
-npm run dev        # local dev server, e.g. http://localhost:5173
-```
-
-For a production build:
-
-```bash
-npm run build       # outputs to frontend/dist
-npm run preview     # serves that build locally to view it
-```
-
-Note: browsers block ES module scripts from running directly off
-`file://`, so `dist/index.html` needs to be served (`npm run preview`, or
-any static file server) rather than double-clicked -- this is a browser
-restriction on all Vite/webpack-built apps, not specific to this project.
+This path exists for scripted/batch use and is what produced the sample
+`output.json` committed in this repo. Day-to-day, the app in the section
+above is the intended way to run it.
 
 ## Output format
 
@@ -148,8 +160,8 @@ restriction on all Vite/webpack-built apps, not specific to this project.
 ## Project structure
 
 ```
-main.py              Entry point: runs graph.py per domain, writes output.json,
-                      syncs frontend/src/data/output.json
+main.py              CLI entry point: runs graph.py per domain, writes output.json
+server.py             FastAPI app: runs graph.py from HTTP requests, serves frontend/dist
 graph.py              LangGraph StateGraph wiring the four agents together
 models.py             Pydantic schemas (ExtractionResult, CompanyIntel, TeamMember)
 agents/
@@ -160,10 +172,12 @@ agents/
 requirements.txt
 .env.example
 output.json           Sample output from a run against the 3 test domains
-frontend/             Vite + React results viewer
-  src/App.jsx           Page layout, run-level stats
-  src/components/       Header, StatsBar, ResultCard, StatusPill
-  src/data/output.json  Synced copy of the root output.json (read at build/run time)
+frontend/             Vite + React app (talks to server.py's API)
+  src/App.jsx           Page layout, empty/loading/error states, run-level stats
+  src/hooks/useEnrichment.js  Loads last results, submits runs, polls job status
+  src/lib/api.js          Fetch wrappers for /api/*
+  src/lib/format.js        Formatting + progress-merging helpers
+  src/components/          Header, RunForm, StatsBar, ResultCard, PendingCard, StatusPill
 ```
 
 ## Notes on resilience
@@ -179,3 +193,10 @@ frontend/             Vite + React results viewer
   taken as-is from the LLM.
 - `main.py` catches any exception from a domain's graph run (not just the
   errors the nodes anticipate) so one bad domain can never crash the batch.
+  `server.py`'s background job runner does the same per domain, so one bad
+  domain in a browser-submitted run doesn't take the rest of that run down
+  either.
+- The frontend shows real loading/empty/error states: a skeleton
+  "processing" card while a domain is in flight, an empty state before the
+  first run, and an inline error banner (with a pointer to start the API
+  server) if `/api/*` can't be reached.

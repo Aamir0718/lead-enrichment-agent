@@ -3,8 +3,8 @@
     "domain": "postman.com",
     "status": "success",
     "error": null,
-    "company_overview": "Postman provides an API platform that lets users design, test, manage, and distribute APIs throughout the development lifecycle. It combines collaboration tools, governance, and AI\u2011assisted features for enterprise\u2011scale API work.",
-    "target_audience": "Engineers and developers who build, test, and manage APIs and services, especially in enterprise environments",
+    "company_overview": "Postman provides an API platform that lets teams design, test, manage, and distribute APIs and services. It streamlines every stage of the API lifecycle and enables collaboration at enterprise scale.",
+    "target_audience": "Developers and engineers who build, test, and operate APIs, especially within enterprise environments.",
     "contact_emails": [
       "help@postman.com"
     ],
@@ -16,16 +16,16 @@
       },
       {
         "name": "Ankit Sobti",
-        "role": "Co\u2011founder",
+        "role": "co\u2011founder",
         "linkedin_url": null
       },
       {
         "name": "Abhijit Kane",
-        "role": "Co\u2011founder",
+        "role": "co\u2011founder",
         "linkedin_url": null
       }
     ],
-    "confidence_score": 0.93,
+    "confidence_score": 0.85,
     "critique_notes": [],
     "pages_scraped": [
       "https://postman.com",
@@ -40,8 +40,8 @@
     "domain": "supabase.com",
     "status": "success",
     "error": null,
-    "company_overview": "Supabase provides a fully managed Postgres\u2011based development platform that bundles a database, authentication, auto\u2011generated APIs, realtime sync, storage, edge functions, and vector search. It enables teams to build, scale, and secure applications without managing infrastructure.",
-    "target_audience": "Developers and product teams building web, mobile, or AI applications who need a complete Postgres backend with auth, APIs, storage, and serverless functions.",
+    "company_overview": "Supabase is an open\u2011source platform that offers a fully managed Postgres database with built\u2011in authentication, realtime sync, storage, edge functions, vector embeddings and auto\u2011generated REST/GraphQL APIs. It enables developers to launch full\u2011stack applications quickly and scale them to millions of users.",
+    "target_audience": "Developers building full\u2011stack applications, AI builders, and enterprise or innovation teams that need a production\u2011ready Postgres backend.",
     "contact_emails": [],
     "leadership": [],
     "confidence_score": 0.5,
@@ -59,8 +59,8 @@
     "domain": "vapi.ai",
     "status": "success",
     "error": null,
-    "company_overview": "Vapi provides an open voice\u2011agent platform that lets enterprises build, test, deploy and continuously improve AI\u2011powered voice agents. The service handles infrastructure, telephony, monitoring and compliance so customers can launch voice AI quickly at scale.",
-    "target_audience": "Enterprises and developers building voice AI agents for use cases such as customer support, lead qualification, and appointment scheduling.",
+    "company_overview": "Vapi provides a platform to build, deploy, and manage advanced voice AI agents, handling the underlying infrastructure for users. It offers real\u2011time monitoring, integrations, and enterprise\u2011grade compliance features for large\u2011scale deployments.",
+    "target_audience": "Developers and product teams building voice AI agents for enterprise applications and large\u2011scale customer\u2011facing use cases",
     "contact_emails": [],
     "leadership": [
       {
@@ -69,7 +69,7 @@
         "linkedin_url": null
       }
     ],
-    "confidence_score": 0.55,
+    "confidence_score": 0.8,
     "critique_notes": [],
     "pages_scraped": [
       "https://vapi.ai",

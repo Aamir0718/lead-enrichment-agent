@@ -6,6 +6,7 @@ import {
   LinkedinLogo,
   WarningCircle,
 } from '@phosphor-icons/react'
+import PendingCard from './PendingCard'
 import StatusPill from './StatusPill'
 import { bareUrl, initials, statusMeta } from '../lib/format'
 
@@ -28,6 +29,11 @@ function EmptyNote({ children }) {
 
 export default function ResultCard({ record, index }) {
   const reduceMotion = useReducedMotion()
+
+  if (record.pending) {
+    return <PendingCard record={record} index={index} reduceMotion={reduceMotion} />
+  }
+
   const meta = statusMeta(record.status)
   const confidence = typeof record.confidence_score === 'number' ? record.confidence_score.toFixed(2) : '-'
 

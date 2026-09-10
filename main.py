@@ -1,4 +1,4 @@
-"""Main Agent / orchestrator.
+"""Main Agent / orchestrator -- CLI entry point.
 
 Runs the LangGraph pipeline (Scraper -> Processor -> Extractor -> Critique,
 see graph.py) for each input domain, aggregates results, and writes
@@ -8,12 +8,15 @@ never stops the batch.
 Usage:
     python main.py                          # runs the 3 default test domains
     python main.py postman.com supabase.com # runs custom domains
+
+For a browser-based experience (enter domains, watch results appear, no
+further terminal use) run `uvicorn server:app --reload` instead -- see
+server.py and README.md.
 """
 from __future__ import annotations
 
 import json
 import logging
-import shutil
 import sys
 from pathlib import Path
 
@@ -39,7 +42,6 @@ logger = logging.getLogger("main")
 
 DEFAULT_DOMAINS = ["postman.com", "supabase.com", "vapi.ai"]
 OUTPUT_PATH = Path(__file__).parent / "output.json"
-FRONTEND_DATA_PATH = Path(__file__).parent / "frontend" / "src" / "data" / "output.json"
 
 
 def run_domain(domain: str) -> CompanyIntel:
@@ -58,13 +60,6 @@ def run_domain(domain: str) -> CompanyIntel:
         return CompanyIntel(domain=domain, status="failed", error=f"Unexpected error: {exc}")
 
 
-def sync_frontend_data() -> None:
-    """Copy output.json into the React app so it always reflects the latest run."""
-    FRONTEND_DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(OUTPUT_PATH, FRONTEND_DATA_PATH)
-    logger.info("Synced results to %s", FRONTEND_DATA_PATH)
-
-
 def main() -> None:
     domains = sys.argv[1:] if len(sys.argv) > 1 else DEFAULT_DOMAINS
     logger.info("Starting lead enrichment run for %d domain(s): %s", len(domains), domains)
@@ -76,11 +71,6 @@ def main() -> None:
         encoding="utf-8",
     )
     logger.info("Wrote results to %s", OUTPUT_PATH)
-
-    try:
-        sync_frontend_data()
-    except Exception:  # noqa: BLE001 -- frontend sync is a nice-to-have, never let it fail the run
-        logger.exception("Could not sync output.json into frontend/ (output.json itself was still written)")
 
     total_llm_calls = sum(r.llm_calls_used for r in results)
     print("\n=== Run Summary ===")

@@ -2,7 +2,7 @@ import { DownloadSimple, GithubLogo } from '@phosphor-icons/react'
 
 const REPO_URL = 'https://github.com/Aamir0718/lead-enrichment-agent'
 
-export default function Header({ onDownload }) {
+export default function Header({ onDownload, downloadDisabled }) {
   return (
     <header className="border-b border-border-soft">
       <div className="mx-auto flex max-w-[1100px] flex-wrap items-center justify-between gap-4 px-6 py-5">
@@ -20,7 +20,8 @@ export default function Header({ onDownload }) {
           <button
             type="button"
             onClick={onDownload}
-            className="inline-flex items-center gap-2 rounded-full border border-border bg-surface px-4 py-2.5 text-sm font-medium text-accent transition hover:border-accent active:scale-[0.98]"
+            disabled={downloadDisabled}
+            className="inline-flex items-center gap-2 rounded-full border border-border bg-surface px-4 py-2.5 text-sm font-medium text-accent transition hover:border-accent active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-border"
           >
             <DownloadSimple size={16} />
             Download JSON
