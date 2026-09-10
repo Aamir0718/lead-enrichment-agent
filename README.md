@@ -209,6 +209,15 @@ frontend/             Vite + React app (talks to server.py's API)
 - Subpage discovery is link-based (keyword-ranked `<a>` tags), so it
   degrades gracefully on sites with a different layout instead of hardcoding
   URL paths.
+- Navigation retries once on transient failures before giving up (most
+  real-world timeouts are a one-off network blip, not a hard block) --
+  confirmed by testing against domains outside the 3 assignment demo
+  targets (stripe.com, notion.so, linear.app, attio.com, zendesk.com).
+- Same-site filtering for subpage discovery is based on where the homepage
+  actually resolved to after redirects (`page.url`), not the URL as typed
+  -- otherwise any domain that redirects to a different host (bare domain
+  -> www, or a different registrable domain entirely, e.g. notion.so ->
+  notion.com) would have every subpage silently discarded.
 - The Critique Agent's email/name cross-check exists specifically to catch
   LLM hallucination -- it never trusts the model's output blindly, and the
   final confidence score is recomputed from actual evidence rather than

@@ -123,6 +123,27 @@ Groq (free/cheap tier) — user will supply GROQ_API_KEY in .env.
       live-run screenshot shows the console filling in with real per-node
       lines and the expanded source panel showing actual scraped vapi.ai
       text, zero console errors.
+- [x] Generalized beyond the 3 demo domains (user asked: "it works for 3
+      domains but not others -- can we improve, or is that against the
+      requirement?" -- answer: improving it is exactly what the rubric
+      wants, the 3 domains are just the demo set). Tested against 5 domains
+      outside the assignment's set (stripe.com, notion.so, linear.app,
+      attio.com, zendesk.com) before changing anything -- 4/5 worked
+      immediately, notion.so failed with a clean timeout (no crash, matches
+      the "never crash" design goal already). Root-caused before fixing:
+      a fresh direct test showed notion.so loads fine in 3.7s (redirects to
+      notion.com), so it was a transient blip, not a real block.
+      Two agents/scraper.py fixes, both re-verified after: (1) navigation
+      now retries once on transient failures (`_goto_with_retry`,
+      NAV_TIMEOUT_MS 15s->20s); (2) same-site subpage filtering now uses
+      `page.url` (where the homepage actually resolved to after redirects)
+      instead of the typed URL -- previously any domain that redirects to
+      a different host (bare domain -> www, or a different registrable
+      domain entirely like notion.so -> notion.com) had every subpage
+      silently discarded, since the host comparison never matched. Re-ran
+      notion.so after the fix: 5 correctly-resolved pages, 0 errors.
+      Re-ran the 3 required domains afterward: no regression, still 1 LLM
+      call each, all success.
 - [ ] User records Loom walkthrough (their side)
 - [ ] Submit email to support@softwarebrio.com
 
