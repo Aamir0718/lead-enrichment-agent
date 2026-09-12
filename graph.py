@@ -9,22 +9,28 @@ script.
 
 Graph shape:
 
-    scrape --(pages found?)--> process --> extract --(parsed ok?)--> critique
-      |no pages                                |no                     |
-      v                                        v                       v
-   finalize <----------------------------- finalize          (needs retry?)
-                                                    (yes)               (no)
-                                                     v                 v
-                                                   retry -> extract   (missing LinkedIn URLs?)
-                                                                      (no)        (yes)
-                                                                     v            v
-                                                                finalize   linkedin_search -> finalize
+    scrape --(pages found?)--> process --> extract --(outcome?)--> critique
+      |no pages                                |  \                    |
+      v                                        |   \ call/parse         v
+   finalize <----------------------------- finalize  \ failed  (needs retry?)
+                                              (already   \        (yes)     (no)
+                                               retried)    v        v      v
+                                                          retry -> extract  (missing LinkedIn URLs?)
+                                                                           (no)        (yes)
+                                                                          v            v
+                                                                     finalize   linkedin_search -> finalize
 
-`retry` is only ever taken once: the Critique Agent's own node marks the
-state as already-retried before requesting a second pass, so a second
-"needs_retry" can never fire. `linkedin_search` (bonus feature) only runs
-when critique isn't retrying AND at least one verified leader is still
-missing a LinkedIn URL; it no-ops cleanly if no TAVILY_API_KEY is set.
+`retry` is only ever taken once across the whole domain, from either
+trigger: an outright extraction failure (LLM call error, bad JSON, schema
+validation) routes straight back through `retry` the first time it
+happens, since that's usually transient and worth one more attempt before
+giving up; a *parsed-but-unusable* result (valid JSON, empty overview/ICP)
+instead reaches Critique first, which requests the retry with corrective
+feedback. Either path sets `retried=True` on the shared budget, so a
+second failure of either kind always falls through to `finalize` instead
+of looping again. `linkedin_search` (bonus feature) only runs when
+critique isn't retrying AND at least one verified leader is still missing
+a LinkedIn URL; it no-ops cleanly if no TAVILY_API_KEY is set.
 
 `stream_pipeline()` is the primary entry point: it runs the graph via
 LangGraph's own `.stream()` (not `.invoke()`) so callers get a human-
@@ -198,7 +204,13 @@ def finalize_node(state: PipelineState) -> dict:
     intel.contact_emails = state.get("cleaned_emails", [])
     intel.leadership = state.get("cleaned_leadership", [])
     intel.confidence_score = state.get("confidence_score", 0.0)
-    intel.critique_notes = state.get("critique_notes", [])
+    # Surface scraper-level warnings (e.g. a subpage that looked like a bot
+    # -block/challenge page rather than real content) alongside Critique's
+    # notes -- a domain can still succeed overall while one page along the
+    # way was suspect, and that should be visible in the result, not just
+    # in the logs.
+    scrape_warnings = [f"Scraper: {w}" for w in state.get("scrape_errors", [])]
+    intel.critique_notes = scrape_warnings + state.get("critique_notes", [])
 
     has_overview = bool(intel.company_overview and intel.company_overview.strip())
     has_audience = bool(intel.target_audience and intel.target_audience.strip())
@@ -220,7 +232,17 @@ def route_after_scrape(state: PipelineState) -> str:
 
 
 def route_after_extract(state: PipelineState) -> str:
-    return "critique" if state.get("extraction") is not None else "finalize"
+    if state.get("extraction") is not None:
+        return "critique"
+    # The extraction call itself failed outright (API error, timeout, bad
+    # JSON, schema validation) rather than returning a usable-but-empty
+    # result -- that's usually transient, so it's worth the one retry the
+    # domain gets before giving up, same as Critique's own retry trigger
+    # below. `retried` is a single shared budget: whichever path spends it
+    # first, the other can never spend it again.
+    if not state.get("retried", False):
+        return "retry"
+    return "finalize"
 
 
 def route_after_critique(state: PipelineState) -> str:
@@ -248,7 +270,11 @@ def build_graph():
     graph.set_entry_point("scrape")
     graph.add_conditional_edges("scrape", route_after_scrape, {"process": "process", "finalize": "finalize"})
     graph.add_edge("process", "extract")
-    graph.add_conditional_edges("extract", route_after_extract, {"critique": "critique", "finalize": "finalize"})
+    graph.add_conditional_edges(
+        "extract",
+        route_after_extract,
+        {"critique": "critique", "retry": "retry", "finalize": "finalize"},
+    )
     graph.add_conditional_edges(
         "critique",
         route_after_critique,
@@ -312,7 +338,7 @@ def _describe_step(node_name: str, output: dict) -> str:
         return f"Critique: verified {n_emails} email(s) and {n_leads} leader(s) against the scraped source -- nothing dropped"
 
     if node_name == "retry":
-        return "Retrying extraction with corrective feedback from Critique"
+        return "Retrying extraction (previous attempt failed outright or Critique flagged it as unusable)"
 
     if node_name == "linkedin_search":
         notes = output.get("critique_notes") or []

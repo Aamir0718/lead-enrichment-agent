@@ -23,34 +23,42 @@ graph.py -- compiled LangGraph pipeline, run once per domain
   │ scrape  │────────────▶│ finalize │
   └────┬────┘             └────▲─────┘
        │ pages found            │
-       ▼                        │ parse/API error
+       ▼                        │ retry already spent
   ┌─────────┐             ┌─────┴─────┐
   │ process │───────────▶│  extract   │◀────────┐
-  └─────────┘             └─────┬─────┘          │
-                                 │ parsed ok       │ retry
-                                 ▼                 │
-                           ┌───────────┐     ┌─────┴────┐
-                           │ critique  │────▶│  retry   │
-                           └─────┬─────┘ yes └──────────┘
-                                 │ no
-                                 ▼
-                    (any leader missing a LinkedIn URL?)
-                          no │         │ yes
-                             ▼         ▼
-                       ┌──────────┐  ┌─────────────────┐
-                       │ finalize │◀─│ linkedin_search  │
-                       └──────────┘  └─────────────────┘
+  └─────────┘             └──┬─────┬──┘          │
+                     parsed ok│     │call/parse    │ retry
+                              ▼     │failed        │
+                        ┌──────────┐│              │
+                        │ critique ││        ┌─────┴────┐
+                        └───┬──┬───┘└───────▶│  retry   │
+                       yes  │  │  no         └──────────┘
+                            ▼  ▼
+                          retry  (any leader missing a LinkedIn URL?)
+                                    no │         │ yes
+                                       ▼         ▼
+                                 ┌──────────┐  ┌─────────────────┐
+                                 │ finalize │◀─│ linkedin_search  │
+                                 └──────────┘  └─────────────────┘
 ```
 
 | Node | Agent | External call? | What it does |
 |---|---|---|---|
-| `scrape` | Scraper | No | Playwright: homepage + up to 4 relevant subpages (about/team/company/contact/pricing) |
+| `scrape` | Scraper | No | Playwright: homepage + up to 4 relevant subpages (about/team/company/contact/pricing); flags pages that look like a bot-block/challenge response instead of real content |
 | `process` | Processor | No | BeautifulSoup: strips scripts/styles/nav, produces clean bounded text + regex ground-truth **generic** emails only |
 | `extract` | Extractor | **Yes, 1 LLM call** | Groq (`openai/gpt-oss-120b`): structured JSON extraction validated with Pydantic, tracks tokens + estimated cost |
-| `critique` | Critique | No | Cross-checks emails/names against the Processor's generic-filtered ground truth to catch hallucinations, recomputes a grounded confidence score. Requests exactly ONE retry back through `extract` if the result is unusable (both overview and ICP empty) |
+| `critique` | Critique | No | Cross-checks emails/names against the Processor's generic-filtered ground truth to catch hallucinations, recomputes a grounded confidence score. Requests the retry back through `extract` if the result is unusable (both overview and ICP empty) |
 | `retry` | - | No | Marks the one-time retry budget as spent, then loops back to `extract` |
 | `linkedin_search` | LinkedIn Search (bonus) | Optional, up to 3 search calls | Only reached if a verified leader is still missing a LinkedIn URL. Searches via Tavily, no-ops cleanly with no `TAVILY_API_KEY` |
-| `finalize` | Main | No | Aggregates node state into the final `CompanyIntel` record |
+| `finalize` | Main | No | Aggregates node state into the final `CompanyIntel` record, including any scraper-level warnings |
+
+The retry budget is spent at most once per domain, from whichever trigger
+hits it first: an outright extraction failure (LLM call error, timeout, bad
+JSON, schema validation) routes straight back to `retry`, since that's
+usually a transient blip worth one more attempt; a *parsed-but-unusable*
+result (valid JSON, empty overview/ICP) instead reaches Critique first,
+which requests the retry with corrective feedback. Either way, a second
+failure always falls through to `finalize` instead of looping again.
 
 Worst case: 2 LLM calls per domain (retry) plus up to 3 LinkedIn search
 calls (bonus feature, separate from the LLM budget). Typical case: 1 LLM
@@ -243,6 +251,7 @@ tests/                pytest suite for the deterministic logic (no LLM/browser m
   test_processor.py     Email filtering, HTML cleaning, text bounding
   test_critique.py       Hallucination detection, confidence scoring, retry decisions
   test_graph_routing.py    Pure routing functions + finalize_node aggregation
+  test_scraper.py          URL normalization, same-site checks, link ranking, bot-block classification
 frontend/             Vite + React app (talks to server.py's API)
   src/App.jsx           Page layout, empty/loading/error states, run-level stats
   src/hooks/useEnrichment.js  Loads last results, submits runs, follows SSE progress
@@ -258,9 +267,10 @@ frontend/             Vite + React app (talks to server.py's API)
 pytest
 ```
 
-40+ tests covering the deterministic agent logic and graph routing --
+60+ tests covering the deterministic agent logic and graph routing --
 no LLM calls, no browser, no mocking needed since these are all pure
-functions operating on plain data.
+functions operating on plain data (scraper tests use a minimal fake
+`page` object rather than launching Playwright).
 
 ## Notes on resilience
 
@@ -278,6 +288,15 @@ functions operating on plain data.
   -- otherwise any domain that redirects to a different host (bare domain
   -> www, or a different registrable domain entirely, e.g. notion.so ->
   notion.com) would have every subpage silently discarded.
+- A page fetch that "succeeds" but actually lands on a bot-block/challenge
+  page (Cloudflare, PerimeterX, etc.) is detected via status code and known
+  page-content markers, not treated as real content -- the page is still
+  kept (best-effort beats nothing) but flagged, and that flag surfaces all
+  the way to the final result's `critique_notes`, not just the logs.
+- An outright extraction failure (LLM API error, timeout, invalid JSON,
+  schema validation) gets the same one-time retry budget as Critique's
+  "result was empty" trigger -- a transient Groq hiccup doesn't
+  permanently fail a domain that would have succeeded on a second try.
 - The Critique Agent's email/name cross-check exists specifically to catch
   LLM hallucination -- it never trusts the model's output blindly, and the
   final confidence score is recomputed from actual evidence rather than

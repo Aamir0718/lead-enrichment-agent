@@ -5,24 +5,47 @@ discovering likely-useful subpages, visiting them, and returning raw HTML.
 Never raises on a per-page failure -- logs and moves on so one bad domain
 (or one bad subpage) can't crash the whole run.
 
-Two resilience details that matter for domains beyond the 3 this project
+Three resilience details that matter for domains beyond the 3 this project
 was demoed against: navigation retries once on transient failures (most
-real-world timeouts are a one-off network blip, not a hard block), and
-same-site filtering is based on where the homepage actually resolved to
-after redirects, not the URL as typed -- otherwise a domain that redirects
-to a different host (bare domain -> www, or even a different registrable
-domain) would have every subpage silently discarded.
+real-world timeouts are a one-off network blip, not a hard block); same-site
+filtering is based on where the homepage actually resolved to after
+redirects, not the URL as typed -- otherwise a domain that redirects to a
+different host (bare domain -> www, or even a different registrable domain)
+would have every subpage silently discarded; and a "successful" fetch that
+actually landed on a Cloudflare/PerimeterX-style challenge page (status code
+or known page-content markers) is flagged rather than silently treated as
+real company content.
 """
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import Optional
 from urllib.parse import urljoin, urlparse
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 
 logger = logging.getLogger(__name__)
+
+# HTTP statuses commonly returned by rate-limiters and anti-bot layers
+# (Cloudflare, PerimeterX, etc.) rather than a real page.
+BOT_BLOCK_STATUS_CODES = {403, 429, 503}
+
+# Phrases that show up in the body of a challenge/interstitial page even
+# when the response status is a plain 200 (a JS challenge renders fine,
+# it just isn't the site's real content). Checked case-insensitively.
+BOT_BLOCK_MARKERS = (
+    "attention required! | cloudflare",
+    "checking if the site connection is secure",
+    "just a moment...",
+    "__cf_chl",
+    "captcha-delivery.com",
+    "perimeterx",
+    "pardon our interruption",
+    "please verify you are a human",
+    "verify you are human",
+)
 
 # Keywords used to rank <a> links found on the homepage. Higher score = more
 # likely to contain the info we care about (team/contact/pricing info).
@@ -68,22 +91,40 @@ def _same_site(base_url: str, candidate_url: str) -> bool:
     return base_host == cand_host
 
 
-def _goto_with_retry(page, url: str, wait_after_ms: int, attempts: int = NAV_RETRY_ATTEMPTS) -> None:
+def _goto_with_retry(page, url: str, wait_after_ms: int, attempts: int = NAV_RETRY_ATTEMPTS):
     """Navigate with up to `attempts` tries. Most real-world failures here
     are transient (a slow DNS lookup, a one-off timeout) rather than a hard
     block, so a single retry meaningfully improves the hit rate on domains
     outside the small set this was hand-tested against. Raises the last
-    error if every attempt fails."""
+    error if every attempt fails. Returns the navigation Response (or None
+    for an in-page navigation) so the caller can inspect its status code."""
     last_error: PlaywrightError | None = None
     for attempt in range(1, attempts + 1):
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
+            response = page.goto(url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
             page.wait_for_timeout(wait_after_ms)  # let JS-rendered content settle
-            return
+            return response
         except PlaywrightError as exc:
             last_error = exc
             logger.warning("Navigation attempt %d/%d failed for %s: %s", attempt, attempts, url, exc)
     raise last_error
+
+
+def _classify_possible_bot_block(response, html: str) -> Optional[str]:
+    """Best-effort check for whether a "successful" fetch actually landed
+    on an anti-bot challenge/interstitial page rather than real content.
+    Returns a human-readable reason, or None if nothing suspicious was
+    detected. Never raises -- this only ever adds an informational note,
+    it must never turn a usable page into a failure."""
+    status = getattr(response, "status", None)
+    if status in BOT_BLOCK_STATUS_CODES:
+        return f"HTTP {status} (commonly a bot-block or rate-limit response)"
+
+    lower_html = html.lower()
+    for marker in BOT_BLOCK_MARKERS:
+        if marker in lower_html:
+            return f"page content matched a known bot-block/challenge marker ('{marker}')"
+    return None
 
 
 def _rank_subpage_links(page, base_url: str) -> list[str]:
@@ -130,7 +171,7 @@ def scrape_domain(domain: str) -> ScrapeResult:
 
             # 1. Homepage
             try:
-                _goto_with_retry(page, base_url, wait_after_ms=1000)
+                response = _goto_with_retry(page, base_url, wait_after_ms=1000)
                 # Use where the page actually landed, not the URL we typed --
                 # domains commonly redirect to a different host (bare domain
                 # -> www, or even a different registrable domain entirely,
@@ -138,7 +179,15 @@ def scrape_domain(domain: str) -> ScrapeResult:
                 # must be based on the resolved host or every subpage on a
                 # redirecting domain gets silently discarded.
                 resolved_url = page.url or base_url
-                result.pages[resolved_url] = page.content()
+                html = page.content()
+                block_reason = _classify_possible_bot_block(response, html)
+                if block_reason:
+                    # Keep the page (best-effort content is still better than
+                    # nothing) but flag it -- a silent success here would let
+                    # a Cloudflare challenge page's boilerplate get treated as
+                    # real company content downstream.
+                    result.errors.append(f"Homepage ({resolved_url}) {block_reason} -- content kept but may be unusable")
+                result.pages[resolved_url] = html
             except PlaywrightError as exc:
                 result.errors.append(
                     f"Homepage fetch failed after {NAV_RETRY_ATTEMPTS} attempt(s) ({base_url}): {exc}"
@@ -150,10 +199,14 @@ def scrape_domain(domain: str) -> ScrapeResult:
             subpage_urls = _rank_subpage_links(page, resolved_url)
             for url in subpage_urls:
                 try:
-                    _goto_with_retry(page, url, wait_after_ms=500)
+                    response = _goto_with_retry(page, url, wait_after_ms=500)
                     status = page.evaluate("() => document.title") is not None
                     if status:
-                        result.pages[url] = page.content()
+                        html = page.content()
+                        block_reason = _classify_possible_bot_block(response, html)
+                        if block_reason:
+                            result.errors.append(f"Subpage ({url}) {block_reason} -- content kept but may be unusable")
+                        result.pages[url] = html
                 except PlaywrightError as exc:
                     result.errors.append(f"Subpage fetch failed after {NAV_RETRY_ATTEMPTS} attempt(s) ({url}): {exc}")
                     continue  # never let one bad subpage kill the run

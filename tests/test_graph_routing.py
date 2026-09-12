@@ -25,9 +25,14 @@ class TestRouteAfterExtract:
         fake_result = object()  # routing only checks for not-None, doesn't inspect it
         assert route_after_extract({"extraction": fake_result}) == "critique"
 
-    def test_routes_to_finalize_when_extraction_failed(self):
-        assert route_after_extract({"extraction": None}) == "finalize"
-        assert route_after_extract({}) == "finalize"
+    def test_routes_to_retry_when_extraction_failed_and_budget_unused(self):
+        # An outright call/parse failure (not a parsed-but-empty result)
+        # gets the same one-time retry budget as Critique's own trigger.
+        assert route_after_extract({"extraction": None}) == "retry"
+        assert route_after_extract({}) == "retry"
+
+    def test_routes_to_finalize_when_extraction_failed_after_retry_spent(self):
+        assert route_after_extract({"extraction": None, "retried": True}) == "finalize"
 
 
 class TestRouteAfterCritique:
@@ -120,6 +125,29 @@ class TestFinalizeNode:
         )
         intel = result["result"]
         assert intel.status == "success"
+
+    def test_scrape_warnings_surface_as_critique_notes_on_success(self):
+        # A subpage-level bot-block warning shouldn't just vanish into the
+        # logs -- it should still be visible on an otherwise-successful result.
+        result = finalize_node(
+            {
+                "domain": "acme.com",
+                "pages": {"https://acme.com": "<html></html>"},
+                "scrape_errors": ["Subpage (https://acme.com/team) HTTP 403 (commonly a bot-block or rate-limit response) -- content kept but may be unusable"],
+                "extraction": ExtractionResult(
+                    company_overview="Acme builds widgets.",
+                    target_audience="Enterprises.",
+                    confidence_score=0.9,
+                ),
+                "cleaned_emails": [],
+                "cleaned_leadership": [],
+                "confidence_score": 0.9,
+                "critique_notes": [],
+            }
+        )
+        intel = result["result"]
+        assert intel.status == "success"
+        assert any(note.startswith("Scraper: Subpage") for note in intel.critique_notes)
 
     def test_one_field_missing_is_partial(self):
         result = finalize_node(
