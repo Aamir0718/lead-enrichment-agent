@@ -186,9 +186,11 @@ python main.py
 ```
 
    This runs the pipeline against the default test domains
-   (`postman.com`, `supabase.com`, `vapi.ai`) and writes `output.json`.
-   `server.py` (see above) will pick up this same file via `GET
-   /api/results` next time it's running, no extra step needed.
+   (`postman.com`, `supabase.com`, `vapi.ai`) and writes both
+   `output.json` (full fidelity) and `output.csv` (flattened,
+   spreadsheet-friendly -- see `export.py`). `server.py` (see above) will
+   pick up `output.json` via `GET /api/results` next time it's running, no
+   extra step needed.
 
    To run against your own domains instead:
 
@@ -197,10 +199,19 @@ python main.py
    ```
 
 This path exists for scripted/batch use and is what produced the sample
-`output.json` committed in this repo. Day-to-day, the app in the section
-above is the intended way to run it.
+`output.json`/`output.csv` committed in this repo. Day-to-day, the app in
+the section above is the intended way to run it.
 
 ## Output format
+
+Every run writes two files with the same records in different shapes --
+`output.json` is the full-fidelity, primary format (nested leadership
+objects, the exact scraped `source_text` each result was extracted from);
+`output.csv` is a flattened, spreadsheet-friendly sibling of the same data
+(list/object fields "; "-joined into single cells, `source_text` dropped
+since a multi-thousand-character blob per row isn't useful in a
+spreadsheet). Use whichever fits -- both are produced by the same run, not
+by separate scripts.
 
 `output.json` is a list of objects, one per domain:
 
@@ -234,24 +245,27 @@ above is the intended way to run it.
 ## Project structure
 
 ```
-main.py              CLI entry point: runs domains concurrently via graph.py, writes output.json
+main.py              CLI entry point: runs domains concurrently via graph.py, writes output.json + output.csv
 server.py             FastAPI app: runs graph.py from HTTP requests (+ SSE), serves frontend/dist
 graph.py              LangGraph StateGraph wiring the five agents together
 models.py             Pydantic schemas (ExtractionResult, CompanyIntel, TeamMember)
+export.py             Flattens CompanyIntel results to CSV (output.csv)
 agents/
-  scraper.py          Scraper Agent -- Playwright, subpage discovery, no LLM
+  scraper.py          Scraper Agent -- Playwright, subpage discovery, bot-block detection, no LLM
   processor.py         Processor Agent -- HTML cleaning + generic-email regex, no LLM
   extractor.py         Extractor Agent -- the only LLM call in the normal path, tracks cost
   critique.py           Critique Agent -- deterministic hallucination/QA check
   linkedin_search.py     LinkedIn Search Agent (bonus) -- optional, Tavily-backed
 requirements.txt
 .env.example
-output.json           Sample output from a run against the 3 test domains
+output.json           Sample output (full fidelity) from a run against the 3 test domains
+output.csv            Same sample run, flattened to CSV
 tests/                pytest suite for the deterministic logic (no LLM/browser mocking needed)
   test_processor.py     Email filtering, HTML cleaning, text bounding
   test_critique.py       Hallucination detection, confidence scoring, retry decisions
   test_graph_routing.py    Pure routing functions + finalize_node aggregation
   test_scraper.py          URL normalization, same-site checks, link ranking, bot-block classification
+  test_export.py           CSV flattening of leadership/list fields
 frontend/             Vite + React app (talks to server.py's API)
   src/App.jsx           Page layout, empty/loading/error states, run-level stats
   src/hooks/useEnrichment.js  Loads last results, submits runs, follows SSE progress

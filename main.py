@@ -2,8 +2,9 @@
 
 Runs the LangGraph pipeline (Scraper -> Processor -> Extractor -> Critique,
 see graph.py) for each input domain, aggregates results, and writes
-output.json. A failure on any single domain is caught and recorded -- it
-never stops the batch.
+output.json (full fidelity) and output.csv (flattened, spreadsheet-friendly
+-- see export.py). A failure on any single domain is caught and recorded --
+it never stops the batch.
 
 Domains run concurrently (bounded by MAX_CONCURRENT_DOMAINS) since each
 domain's pipeline is fully independent -- each gets its own Playwright
@@ -36,6 +37,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
 
+from export import write_csv
 from graph import stream_pipeline
 from models import CompanyIntel
 
@@ -49,6 +51,7 @@ logger = logging.getLogger("main")
 
 DEFAULT_DOMAINS = ["postman.com", "supabase.com", "vapi.ai"]
 OUTPUT_PATH = Path(__file__).parent / "output.json"
+CSV_OUTPUT_PATH = Path(__file__).parent / "output.csv"
 MAX_CONCURRENT_DOMAINS = int(os.environ.get("MAX_CONCURRENT_DOMAINS", "3"))
 
 
@@ -101,12 +104,19 @@ def main() -> None:
     )
     logger.info("Wrote results to %s", OUTPUT_PATH)
 
+    # CSV is a spreadsheet-friendly flattening of the same records (no
+    # nested leadership objects, no source_text) -- written alongside the
+    # JSON, not instead of it, so both sample-output formats the assignment
+    # accepts are produced by a single run.
+    write_csv(results, CSV_OUTPUT_PATH)
+    logger.info("Wrote results to %s", CSV_OUTPUT_PATH)
+
     total_llm_calls = sum(r.llm_calls_used for r in results)
     print("\n=== Run Summary ===")
     for r in results:
         print(f"  {r.domain:20s} status={r.status:8s} confidence={r.confidence_score:.2f} llm_calls={r.llm_calls_used}")
     print(f"\nTotal LLM calls used: {total_llm_calls}")
-    print(f"Output written to: {OUTPUT_PATH}")
+    print(f"Output written to: {OUTPUT_PATH} and {CSV_OUTPUT_PATH}")
 
 
 if __name__ == "__main__":
