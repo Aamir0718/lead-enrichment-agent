@@ -230,6 +230,20 @@ def get_last_results():
     return json.loads(OUTPUT_PATH.read_text(encoding="utf-8"))
 
 
+@app.middleware("http")
+async def no_cache_html_shell(request, call_next):
+    """Vite's built JS/CSS filenames are content-hashed, so browsers are
+    free to cache those aggressively -- but index.html itself has no hash,
+    and a cached copy pointing at a since-deleted hashed filename (from a
+    previous build) causes exactly the confusing 404s this is meant to
+    prevent. Only the HTML shell is exempted from caching; hashed assets
+    are untouched."""
+    response = await call_next(request)
+    if request.url.path in ("/", "/index.html"):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
+
+
 if FRONTEND_DIST.exists():
     app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
 else:
