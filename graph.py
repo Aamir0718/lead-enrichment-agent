@@ -13,14 +13,18 @@ Graph shape:
       |no pages                                |no                     |
       v                                        v                       v
    finalize <----------------------------- finalize          (needs retry?)
-                                                              /            \
-                                                          yes/              \no
-                                                            v                v
-                                                          retry -> extract  finalize
+                                                    (yes)               (no)
+                                                     v                 v
+                                                   retry -> extract   (missing LinkedIn URLs?)
+                                                                      (no)        (yes)
+                                                                     v            v
+                                                                finalize   linkedin_search -> finalize
 
 `retry` is only ever taken once: the Critique Agent's own node marks the
 state as already-retried before requesting a second pass, so a second
-"needs_retry" can never fire.
+"needs_retry" can never fire. `linkedin_search` (bonus feature) only runs
+when critique isn't retrying AND at least one verified leader is still
+missing a LinkedIn URL; it no-ops cleanly if no TAVILY_API_KEY is set.
 
 `stream_pipeline()` is the primary entry point: it runs the graph via
 LangGraph's own `.stream()` (not `.invoke()`) so callers get a human-
@@ -32,15 +36,19 @@ final CompanyIntel.
 """
 from __future__ import annotations
 
+import os
 from typing import Optional, TypedDict
 
 from langgraph.graph import END, StateGraph
 
 from agents.critique import critique
 from agents.extractor import extract
+from agents.linkedin_search import find_linkedin_url
 from agents.processor import process_pages
 from agents.scraper import scrape_domain
 from models import CompanyIntel, ExtractionResult, TeamMember
+
+MAX_LINKEDIN_LOOKUPS_PER_DOMAIN = 3
 
 
 class PipelineState(TypedDict, total=False):
@@ -50,10 +58,15 @@ class PipelineState(TypedDict, total=False):
     scrape_errors: list
 
     combined_text: str
+    raw_emails_found: list
 
     extraction: Optional[ExtractionResult]
     extraction_error: Optional[str]
     llm_calls_used: int
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    estimated_cost_usd: float
 
     retried: bool
     retry_feedback: Optional[str]
@@ -63,6 +76,7 @@ class PipelineState(TypedDict, total=False):
     cleaned_leadership: list
     confidence_score: float
     critique_notes: list
+    linkedin_calls_used: int
 
     result: CompanyIntel
 
@@ -82,12 +96,15 @@ def scrape_node(state: PipelineState) -> dict:
 def process_node(state: PipelineState) -> dict:
     """Processor Agent (deterministic)."""
     processed = process_pages(state["pages"])
-    return {"combined_text": processed.combined_text}
+    return {
+        "combined_text": processed.combined_text,
+        "raw_emails_found": sorted(processed.raw_emails_found),
+    }
 
 
 def extract_node(state: PipelineState) -> dict:
     """Extractor Agent -- the only node that calls an LLM."""
-    result, err = extract(
+    result, err, usage = extract(
         state["domain"],
         state["combined_text"],
         feedback=state.get("retry_feedback"),
@@ -96,12 +113,16 @@ def extract_node(state: PipelineState) -> dict:
         "extraction": result,
         "extraction_error": err,
         "llm_calls_used": state.get("llm_calls_used", 0) + 1,
+        "prompt_tokens": state.get("prompt_tokens", 0) + usage.prompt_tokens,
+        "completion_tokens": state.get("completion_tokens", 0) + usage.completion_tokens,
+        "total_tokens": state.get("total_tokens", 0) + usage.total_tokens,
+        "estimated_cost_usd": round(state.get("estimated_cost_usd", 0.0) + usage.estimated_cost_usd, 6),
     }
 
 
 def critique_node(state: PipelineState) -> dict:
     """Critique Agent (deterministic unless it requests a retry)."""
-    outcome = critique(state["extraction"], state["combined_text"])
+    outcome = critique(state["extraction"], state["combined_text"], state.get("raw_emails_found"))
     already_retried = state.get("retried", False)
     return {
         "cleaned_emails": outcome.cleaned_emails,
@@ -118,10 +139,45 @@ def retry_node(state: PipelineState) -> dict:
     return {"retried": True}
 
 
+def linkedin_node(state: PipelineState) -> dict:
+    """LinkedIn Search Agent (bonus, deterministic control flow around an
+    external search call). Only reached when at least one verified leader
+    is missing a LinkedIn URL (see route_after_critique) -- fills in what
+    it can find, bounded to avoid unbounded external calls, and never lets
+    a search failure affect the rest of the result."""
+    domain = state["domain"]
+    leadership = state.get("cleaned_leadership", [])
+    notes = list(state.get("critique_notes", []))
+
+    if not os.environ.get("TAVILY_API_KEY"):
+        notes.append("LinkedIn search skipped: no TAVILY_API_KEY configured.")
+        return {"critique_notes": notes, "linkedin_calls_used": 0}
+
+    updated = []
+    calls = 0
+    for member in leadership:
+        if member.linkedin_url or calls >= MAX_LINKEDIN_LOOKUPS_PER_DOMAIN:
+            updated.append(member)
+            continue
+        calls += 1
+        url = find_linkedin_url(member.name, domain)
+        if url:
+            member = member.model_copy(update={"linkedin_url": url})
+            notes.append(f"Found LinkedIn for {member.name} via web search (not present on the scraped pages).")
+        updated.append(member)
+
+    return {"cleaned_leadership": updated, "critique_notes": notes, "linkedin_calls_used": calls}
+
+
 def finalize_node(state: PipelineState) -> dict:
     """Main Agent's aggregation step -- builds the final CompanyIntel."""
     intel = CompanyIntel(domain=state["domain"], pages_scraped=state.get("pages_scraped", []))
     intel.llm_calls_used = state.get("llm_calls_used", 0)
+    intel.linkedin_calls_used = state.get("linkedin_calls_used", 0)
+    intel.prompt_tokens = state.get("prompt_tokens", 0)
+    intel.completion_tokens = state.get("completion_tokens", 0)
+    intel.total_tokens = state.get("total_tokens", 0)
+    intel.estimated_cost_usd = state.get("estimated_cost_usd", 0.0)
     # Keep the exact text the LLM saw attached to the result -- proof every
     # field can be checked against, not just the model's word for it.
     intel.source_text = state.get("combined_text", "")
@@ -168,7 +224,12 @@ def route_after_extract(state: PipelineState) -> str:
 
 
 def route_after_critique(state: PipelineState) -> str:
-    return "retry" if state.get("needs_retry") else "finalize"
+    if state.get("needs_retry"):
+        return "retry"
+    leadership = state.get("cleaned_leadership") or []
+    if any(not member.linkedin_url for member in leadership):
+        return "linkedin_search"
+    return "finalize"
 
 
 # --- Graph assembly -------------------------------------------------------
@@ -181,14 +242,20 @@ def build_graph():
     graph.add_node("extract", extract_node)
     graph.add_node("critique", critique_node)
     graph.add_node("retry", retry_node)
+    graph.add_node("linkedin_search", linkedin_node)
     graph.add_node("finalize", finalize_node)
 
     graph.set_entry_point("scrape")
     graph.add_conditional_edges("scrape", route_after_scrape, {"process": "process", "finalize": "finalize"})
     graph.add_edge("process", "extract")
     graph.add_conditional_edges("extract", route_after_extract, {"critique": "critique", "finalize": "finalize"})
-    graph.add_conditional_edges("critique", route_after_critique, {"retry": "retry", "finalize": "finalize"})
+    graph.add_conditional_edges(
+        "critique",
+        route_after_critique,
+        {"retry": "retry", "linkedin_search": "linkedin_search", "finalize": "finalize"},
+    )
     graph.add_edge("retry", "extract")
+    graph.add_edge("linkedin_search", "finalize")
     graph.add_edge("finalize", END)
 
     return graph.compile()
@@ -230,7 +297,9 @@ def _describe_step(node_name: str, output: dict) -> str:
         call_n = output.get("llm_calls_used", "?")
         if err:
             return f"Extractor: LLM call #{call_n} failed -- {err}"
-        return f"Extractor: LLM call #{call_n} returned structured data"
+        tokens = output.get("total_tokens", 0)
+        cost = output.get("estimated_cost_usd", 0.0)
+        return f"Extractor: LLM call #{call_n} returned structured data ({tokens:,} tokens, ~${cost:.4f})"
 
     if node_name == "critique":
         notes = output.get("critique_notes") or []
@@ -245,11 +314,22 @@ def _describe_step(node_name: str, output: dict) -> str:
     if node_name == "retry":
         return "Retrying extraction with corrective feedback from Critique"
 
+    if node_name == "linkedin_search":
+        notes = output.get("critique_notes") or []
+        calls = output.get("linkedin_calls_used", 0)
+        if calls == 0:
+            return "LinkedIn Search: skipped (no TAVILY_API_KEY configured)"
+        found = sum(1 for note in notes if note.startswith("Found LinkedIn for"))
+        return f"LinkedIn Search: {calls} lookup(s), found {found} new profile(s)"
+
     if node_name == "finalize":
         result: Optional[CompanyIntel] = output.get("result")
         if result is None:
             return "Finalize: no result produced"
-        return f"Finalize: status={result.status}, confidence={result.confidence_score:.2f}"
+        return (
+            f"Finalize: status={result.status}, confidence={result.confidence_score:.2f}, "
+            f"total cost ~${result.estimated_cost_usd:.4f} ({result.total_tokens:,} tokens)"
+        )
 
     return f"{node_name}: complete"
 

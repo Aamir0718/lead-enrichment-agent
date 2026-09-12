@@ -7,6 +7,11 @@ export function initials(name) {
     .join('')
 }
 
+export function formatCost(usd) {
+  if (!usd) return '$0.0000'
+  return `$${usd.toFixed(4)}`
+}
+
 export function bareUrl(url) {
   return (url || '').replace(/^https?:\/\//, '').replace(/\/$/, '')
 }
@@ -18,20 +23,22 @@ export function statusMeta(status) {
 }
 
 /**
- * Merges a job's submitted domain order with whatever results have come
- * back so far, so the UI can render a full-length list immediately: real
- * cards for completed domains, and live "processing" / "queued" placeholder
- * cards for the rest (the pipeline runs domains strictly in order, so at
- * most one is ever "processing" at a time).
+ * Merges a job's submitted domain order with whatever results/in-progress
+ * state have come back so far, so the UI can render a full-length list
+ * immediately: real cards for completed domains, "Processing" for domains
+ * the backend says are actively running, and "Queued" for the rest.
+ *
+ * Domains now run concurrently server-side (bounded by
+ * MAX_CONCURRENT_DOMAINS), so more than one can be "Processing" at once --
+ * this can no longer assume only the first pending domain is running.
  */
-export function mergeProgress(domains, results) {
+export function mergeProgress(domains, results, inProgress = []) {
   const byDomain = Object.fromEntries(results.map((r) => [r.domain, r]))
-  let processingAssigned = false
+  const runningSet = new Set(inProgress)
   return domains.map((domain) => {
     const done = byDomain[domain]
     if (done) return done
-    if (!processingAssigned) {
-      processingAssigned = true
+    if (runningSet.has(domain)) {
       return { domain, pending: true, tone: 'processing', label: 'Processing' }
     }
     return { domain, pending: true, tone: 'queued', label: 'Queued' }

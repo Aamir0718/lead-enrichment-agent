@@ -2,8 +2,9 @@
 
 Vite + React app for the [Lead Enrichment Agent](../README.md) pipeline.
 Lets you enter company domains, run the pipeline, and watch structured
-results appear -- entirely from the browser, talking to `../server.py`'s
-API (`/api/enrich`, `/api/enrich/{job_id}`, `/api/results`).
+results appear live -- entirely from the browser, talking to
+`../server.py`'s API (`/api/enrich`, `/api/enrich/{job_id}/stream` for
+live Server-Sent-Events updates, `/api/results`).
 
 ## Stack
 
@@ -42,7 +43,8 @@ app, not just this one.
 src/
   App.jsx              Page layout: run form, stats, results, empty/error states
   hooks/
-    useEnrichment.js    Loads last results on mount, submits new runs, polls job status
+    useEnrichment.js    Loads last results on mount, submits new runs, follows job
+                          progress via Server-Sent Events
   lib/
     api.js               fetch wrappers for /api/enrich, /api/enrich/{id}, /api/results
     format.js             initials/URL helpers, status labels, progress-merging

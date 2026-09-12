@@ -6,6 +6,7 @@ import ConsolePanel from './components/ConsolePanel'
 import StatsBar from './components/StatsBar'
 import ResultCard from './components/ResultCard'
 import { useEnrichment } from './hooks/useEnrichment'
+import { formatCost } from './lib/format'
 
 function EmptyState() {
   return (
@@ -40,12 +41,14 @@ export default function App() {
       ? scored.reduce((sum, r) => sum + r.confidence_score, 0) / scored.length
       : 0
     const totalCalls = completed.reduce((sum, r) => sum + (r.llm_calls_used || 0), 0)
+    const totalCost = completed.reduce((sum, r) => sum + (r.estimated_cost_usd || 0), 0)
 
     return [
       { label: 'Domains processed', value: total },
       { label: 'Success rate', value: total ? `${Math.round((succeeded / total) * 100)}%` : '-' },
       { label: 'Avg. confidence', value: avgConfidence.toFixed(2) },
       { label: 'Total LLM calls', value: totalCalls },
+      { label: 'Est. total cost', value: formatCost(totalCost) },
     ]
   }, [completed])
 

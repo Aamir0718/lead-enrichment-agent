@@ -17,15 +17,18 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -43,6 +46,8 @@ logger = logging.getLogger("server")
 OUTPUT_PATH = Path(__file__).parent / "output.json"
 FRONTEND_DIST = Path(__file__).parent / "frontend" / "dist"
 MAX_DOMAINS_PER_RUN = 10
+MAX_CONCURRENT_DOMAINS = int(os.environ.get("MAX_CONCURRENT_DOMAINS", "3"))
+SSE_POLL_INTERVAL_SECONDS = 0.3
 
 app = FastAPI(title="Lead Enrichment Agent API")
 
@@ -75,7 +80,11 @@ class Job:
     so the frontend can render cards progressively, not just at the end.
     `logs` is the same step-by-step trail main.py prints to the console,
     captured here so the browser has the same visibility into what's
-    actually happening instead of a silent spinner."""
+    actually happening instead of a silent spinner. `in_progress` exists
+    because domains now run concurrently (bounded by
+    MAX_CONCURRENT_DOMAINS) -- more than one can be actively running at
+    once, so the frontend needs to know which ones, not just assume the
+    first not-yet-done domain is the one running."""
 
     def __init__(self, domains: list[str]):
         self.id = uuid.uuid4().hex
@@ -83,6 +92,7 @@ class Job:
         self.status = "running"  # running | done
         self.results: dict[str, CompanyIntel] = {}
         self.logs: list[dict] = []
+        self.in_progress: set[str] = set()
 
 
 _jobs: dict[str, Job] = {}
@@ -95,31 +105,47 @@ def _log(job: Job, message: str) -> None:
     logger.info("Job %s: %s", job.id, message)
 
 
+def _run_one_domain(job: Job, domain: str) -> None:
+    """Runs a single domain's pipeline and records its result. Never
+    raises -- one bad domain must never take the rest of the job down."""
+    with _jobs_lock:
+        job.in_progress.add(domain)
+
+    intel: Optional[CompanyIntel] = None
+    try:
+        for event in stream_pipeline(domain):
+            if event["type"] == "log":
+                _log(job, f"[{domain}] {event['message']}")
+            else:
+                intel = event["result"]
+    except Exception as exc:  # noqa: BLE001 -- one bad domain must never kill the job
+        logger.exception("Unexpected error processing %s", domain)
+        _log(job, f"[{domain}] Unexpected error: {exc}")
+        intel = CompanyIntel(domain=domain, status="failed", error=f"Unexpected error: {exc}")
+
+    if intel is None:
+        intel = CompanyIntel(domain=domain, status="failed", error="Pipeline produced no result")
+
+    with _jobs_lock:
+        job.in_progress.discard(domain)
+        job.results[domain] = intel
+
+
 def _execute_job(job: Job) -> None:
-    """Runs domains one at a time in a background thread.
+    """Runs the job's domains concurrently (bounded by
+    MAX_CONCURRENT_DOMAINS), in a background thread.
 
     Playwright's sync API (used by the Scraper Agent) can't run inside a
-    thread that already has an asyncio event loop -- a plain background
-    thread (not an asyncio task) sidesteps that entirely.
+    thread that already has an asyncio event loop -- this whole function
+    runs in a plain background thread started by start_enrich() (not an
+    asyncio task), and a nested ThreadPoolExecutor's workers are plain OS
+    threads too, so both levels are safe by the same reasoning. Actual LLM
+    calls are paced separately (see agents/extractor.py's throttle) to stay
+    under Groq's rate limit regardless of how many domains scrape at once.
     """
-    for domain in job.order:
-        intel: Optional[CompanyIntel] = None
-        try:
-            for event in stream_pipeline(domain):
-                if event["type"] == "log":
-                    _log(job, f"[{domain}] {event['message']}")
-                else:
-                    intel = event["result"]
-        except Exception as exc:  # noqa: BLE001 -- one bad domain must never kill the job
-            logger.exception("Unexpected error processing %s", domain)
-            _log(job, f"[{domain}] Unexpected error: {exc}")
-            intel = CompanyIntel(domain=domain, status="failed", error=f"Unexpected error: {exc}")
-
-        if intel is None:
-            intel = CompanyIntel(domain=domain, status="failed", error="Pipeline produced no result")
-
-        with _jobs_lock:
-            job.results[domain] = intel
+    workers = max(1, min(MAX_CONCURRENT_DOMAINS, len(job.order)))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        list(executor.map(lambda domain: _run_one_domain(job, domain), job.order))
 
     with _jobs_lock:
         job.status = "done"
@@ -140,12 +166,16 @@ def start_enrich(payload: EnrichRequest):
     return {"job_id": job.id, "domains": job.order}
 
 
-@app.get("/api/enrich/{job_id}")
-def get_enrich_status(job_id: str):
+def _get_job_or_404(job_id: str) -> Job:
     with _jobs_lock:
         job = _jobs.get(job_id)
-        if job is None:
-            raise HTTPException(status_code=404, detail="Job not found")
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+def _job_snapshot(job: Job) -> dict:
+    with _jobs_lock:
         results = [job.results[d].model_dump() for d in job.order if d in job.results]
         return {
             "job_id": job.id,
@@ -155,7 +185,41 @@ def get_enrich_status(job_id: str):
             "total": len(job.order),
             "results": results,
             "logs": list(job.logs),
+            "in_progress": list(job.in_progress),
         }
+
+
+@app.get("/api/enrich/{job_id}")
+def get_enrich_status(job_id: str):
+    return _job_snapshot(_get_job_or_404(job_id))
+
+
+@app.get("/api/enrich/{job_id}/stream")
+def stream_enrich_status(job_id: str):
+    """Server-Sent Events version of the status endpoint -- pushes a fresh
+    snapshot the moment anything changes instead of making the browser poll
+    on a fixed interval. Internally this still checks the in-memory job on
+    a short timer (SSE_POLL_INTERVAL_SECONDS) rather than being truly
+    event-driven end to end; that's an honest trade-off for this scope --
+    a full pub/sub rewrite would be over-engineering for a single-process
+    app, and this already cuts perceived latency from ~1.2s to ~0.3s while
+    using one long-lived connection instead of repeated HTTP requests."""
+    job = _get_job_or_404(job_id)
+
+    def event_stream():
+        last_payload = None
+        while True:
+            snapshot = _job_snapshot(job)
+            payload = json.dumps(snapshot)
+            if payload != last_payload:
+                yield f"data: {payload}\n\n"
+                last_payload = payload
+            if snapshot["status"] == "done":
+                yield "event: done\ndata: {}\n\n"
+                return
+            time.sleep(SSE_POLL_INTERVAL_SECONDS)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.get("/api/results")

@@ -41,6 +41,12 @@ class CompanyIntel(BaseModel):
 
     pages_scraped: List[str] = Field(default_factory=list)
     llm_calls_used: int = 0
+    linkedin_calls_used: int = 0
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    estimated_cost_usd: float = 0.0
 
     source_text: str = Field(
         default="",

@@ -11,7 +11,7 @@ import {
 } from '@phosphor-icons/react'
 import PendingCard from './PendingCard'
 import StatusPill from './StatusPill'
-import { bareUrl, initials, statusMeta } from '../lib/format'
+import { bareUrl, formatCost, initials, statusMeta } from '../lib/format'
 
 function SourceProof({ record }) {
   const [open, setOpen] = useState(false)
@@ -190,6 +190,11 @@ export default function ResultCard({ record, index }) {
               <div className="flex items-center gap-1.5 text-[13px] text-ink-faint">
                 <Lightning size={14} />
                 {record.llm_calls_used ?? 0} LLM call{record.llm_calls_used === 1 ? '' : 's'}
+                {record.total_tokens > 0 && (
+                  <span>
+                    &#183; {record.total_tokens.toLocaleString()} tokens &#183; {formatCost(record.estimated_cost_usd)}
+                  </span>
+                )}
               </div>
             </div>
           </div>

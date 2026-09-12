@@ -5,6 +5,11 @@ see graph.py) for each input domain, aggregates results, and writes
 output.json. A failure on any single domain is caught and recorded -- it
 never stops the batch.
 
+Domains run concurrently (bounded by MAX_CONCURRENT_DOMAINS) since each
+domain's pipeline is fully independent -- each gets its own Playwright
+browser instance (see agents/scraper.py), so there's no shared state to
+worry about between threads.
+
 Usage:
     python main.py                          # runs the 3 default test domains
     python main.py postman.com supabase.com # runs custom domains
@@ -17,7 +22,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -42,18 +49,22 @@ logger = logging.getLogger("main")
 
 DEFAULT_DOMAINS = ["postman.com", "supabase.com", "vapi.ai"]
 OUTPUT_PATH = Path(__file__).parent / "output.json"
+MAX_CONCURRENT_DOMAINS = int(os.environ.get("MAX_CONCURRENT_DOMAINS", "3"))
 
 
 def run_domain(domain: str) -> CompanyIntel:
     """Run the LangGraph pipeline for a single domain, logging every step
     as it happens (not just a start/done line) -- this is the CLI's proof
-    of what the agent actually did. Never raises."""
+    of what the agent actually did. Never raises.
+
+    Log lines are prefixed with the domain since, with concurrent domains,
+    multiple pipelines interleave their output in the console."""
     logger.info("=== Processing %s ===", domain)
     intel: CompanyIntel | None = None
     try:
         for event in stream_pipeline(domain):
             if event["type"] == "log":
-                logger.info("  %s", event["message"])
+                logger.info("  [%s] %s", domain, event["message"])
             else:
                 intel = event["result"]
     except Exception as exc:  # noqa: BLE001 -- last-resort guard so one domain never kills the batch
@@ -73,9 +84,16 @@ def run_domain(domain: str) -> CompanyIntel:
 
 def main() -> None:
     domains = sys.argv[1:] if len(sys.argv) > 1 else DEFAULT_DOMAINS
-    logger.info("Starting lead enrichment run for %d domain(s): %s", len(domains), domains)
+    workers = max(1, min(MAX_CONCURRENT_DOMAINS, len(domains)))
+    logger.info(
+        "Starting lead enrichment run for %d domain(s), up to %d concurrently: %s",
+        len(domains), workers, domains,
+    )
 
-    results = [run_domain(domain) for domain in domains]
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        # executor.map preserves input order in the results list even
+        # though domains may finish out of order.
+        results = list(executor.map(run_domain, domains))
 
     OUTPUT_PATH.write_text(
         json.dumps([r.model_dump() for r in results], indent=2),

@@ -32,34 +32,59 @@ graph.py -- compiled LangGraph pipeline, run once per domain
                            ┌───────────┐     ┌─────┴────┐
                            │ critique  │────▶│  retry   │
                            └─────┬─────┘ yes └──────────┘
-                                 │ no (or already retried)
+                                 │ no
                                  ▼
-                           ┌───────────┐
-                           │ finalize  │
-                           └───────────┘
+                    (any leader missing a LinkedIn URL?)
+                          no │         │ yes
+                             ▼         ▼
+                       ┌──────────┐  ┌─────────────────┐
+                       │ finalize │◀─│ linkedin_search  │
+                       └──────────┘  └─────────────────┘
 ```
 
-| Node | Agent | LLM? | What it does |
+| Node | Agent | External call? | What it does |
 |---|---|---|---|
 | `scrape` | Scraper | No | Playwright: homepage + up to 4 relevant subpages (about/team/company/contact/pricing) |
-| `process` | Processor | No | BeautifulSoup: strips scripts/styles/nav, produces clean bounded text + regex ground-truth emails |
-| `extract` | Extractor | **Yes, 1 call** | Groq (Llama via `openai/gpt-oss-120b`): structured JSON extraction validated with Pydantic |
-| `critique` | Critique | No (by default) | Cross-checks emails/names against the actual scraped text to catch hallucinations, recomputes a grounded confidence score. Requests exactly ONE retry back through `extract` if the result is unusable (both overview and ICP empty) |
+| `process` | Processor | No | BeautifulSoup: strips scripts/styles/nav, produces clean bounded text + regex ground-truth **generic** emails only |
+| `extract` | Extractor | **Yes, 1 LLM call** | Groq (`openai/gpt-oss-120b`): structured JSON extraction validated with Pydantic, tracks tokens + estimated cost |
+| `critique` | Critique | No | Cross-checks emails/names against the Processor's generic-filtered ground truth to catch hallucinations, recomputes a grounded confidence score. Requests exactly ONE retry back through `extract` if the result is unusable (both overview and ICP empty) |
 | `retry` | - | No | Marks the one-time retry budget as spent, then loops back to `extract` |
+| `linkedin_search` | LinkedIn Search (bonus) | Optional, up to 3 search calls | Only reached if a verified leader is still missing a LinkedIn URL. Searches via Tavily, no-ops cleanly with no `TAVILY_API_KEY` |
 | `finalize` | Main | No | Aggregates node state into the final `CompanyIntel` record |
 
-Worst case: 2 LLM calls per domain. Typical case: 1. Every node's own
-external calls (page navigation, LLM request) are wrapped in try/except, and
-`main.py` wraps the whole graph invocation per domain again -- a single
-domain's failure (bot block, timeout, 404, malformed LLM output) never stops
+Worst case: 2 LLM calls per domain (retry) plus up to 3 LinkedIn search
+calls (bonus feature, separate from the LLM budget). Typical case: 1 LLM
+call, 0-3 LinkedIn searches only when needed. Every node's own external
+calls are wrapped in try/except, and `main.py`/`server.py` wrap the whole
+graph invocation per domain again -- a single domain's failure never stops
 the batch. It's recorded with `status: "failed"` and an `error` message
 instead.
 
 The agent modules themselves (`agents/scraper.py`, `processor.py`,
-`extractor.py`, `critique.py`) are framework-agnostic plain functions --
-`graph.py` is a thin orchestration layer on top of them, so the same
-functions could be re-wired into a different graph shape without touching
-their internals.
+`extractor.py`, `critique.py`, `linkedin_search.py`) are framework-agnostic
+plain functions -- `graph.py` is a thin orchestration layer on top of them,
+so the same functions could be re-wired into a different graph shape
+without touching their internals.
+
+### Concurrency and rate limits
+
+Domains process concurrently (bounded by `MAX_CONCURRENT_DOMAINS`, default
+3) in both the CLI and the API -- each domain gets its own Playwright
+browser instance, so there's no shared state between them. This gives a
+real speedup for the scraping stage.
+
+The Extractor's actual LLM calls are paced separately
+(`GROQ_MIN_SECONDS_BETWEEN_CALLS`, default 45s) regardless of how many
+domains scrape concurrently. This exists because of a real finding, not a
+theoretical one: testing 3 domains concurrently against Groq's free/
+on-demand tier (8000 tokens-per-minute) produced repeated 429s and, once,
+an outright failed domain -- a single ~5000-token extraction call already
+uses most of that budget. Proactive pacing trades a bit of wall-clock time
+for guaranteed reliability (no domain fails outright due to a rate-limit
+collision), which matters more than raw speed for something meant to be
+graded and rerun. On a paid Groq tier, lowering
+`GROQ_MIN_SECONDS_BETWEEN_CALLS` lets concurrent scraping's benefit fully
+show up in wall-clock time.
 
 ## Run it as an app (no terminal after this)
 
@@ -92,16 +117,17 @@ uvicorn server:app --reload
 ```
 
 Then open **http://localhost:8000**. Type domains into the form, click
-**Run agent**, and cards fill in live as each domain finishes (the pipeline
-still runs domains one at a time, so you'll see a "Processing" skeleton
-card, then queued placeholders, resolve into real results). Reloading the
-page always shows whatever the last run produced, via `GET /api/results`.
+**Run agent**, and cards fill in live as domains finish -- since domains
+run concurrently, more than one can show a "Processing" skeleton at once,
+with "Queued" placeholders for the rest. Reloading the page always shows
+whatever the last run produced, via `GET /api/results`.
 
-`server.py` wraps the exact same `graph.run_pipeline()` the CLI uses --
-same agents, same 4-node LangGraph, same 1-call-per-domain LLM budget. It
-just adds an HTTP layer (`POST /api/enrich`, `GET /api/enrich/{job_id}` for
-polling, `GET /api/results`) and serves the built frontend from the same
-process, so there's exactly one thing to start.
+`server.py` wraps the exact same `graph.stream_pipeline()` the CLI uses --
+same agents, same LangGraph, same LLM budget. It adds an HTTP layer
+(`POST /api/enrich` to start a run, `GET /api/enrich/{job_id}/stream` for
+live Server-Sent-Events updates, `GET /api/results` for the last run) and
+serves the built frontend from the same process, so there's exactly one
+thing to start.
 
 **Developing the frontend?** Run `uvicorn server:app --reload` in one
 terminal and (`cd frontend`, then `npm run dev`) in another -- Vite's dev
@@ -127,6 +153,20 @@ output:
   against it directly. The frontend exposes this as a "View scraped
   source" disclosure on each card, with a note on whether the Critique
   Agent found everything verifiable or had to drop something.
+
+## Bonus features
+
+- **Cost tracking.** Every result carries `prompt_tokens`,
+  `completion_tokens`, `total_tokens`, and `estimated_cost_usd` (Groq's
+  `response.usage`, priced via `GROQ_INPUT_COST_PER_1M` /
+  `GROQ_OUTPUT_COST_PER_1M`). Shown per-domain on each card and totaled in
+  the stats bar / run summary.
+- **LinkedIn/founder search.** If a verified leader has no LinkedIn URL on
+  the company's own site, `agents/linkedin_search.py` looks one up via
+  Tavily (bounded to 3 lookups/domain), validated against a real
+  `linkedin.com/in/...` URL pattern before being accepted -- never trusted
+  blindly. Fully optional: no `TAVILY_API_KEY` means this step no-ops with
+  a note, never an error.
 
 ## Setup (CLI / scripted use)
 
@@ -163,14 +203,19 @@ above is the intended way to run it.
   "error": null,
   "company_overview": "...",
   "target_audience": "...",
-  "contact_emails": ["support@postman.com"],
+  "contact_emails": ["help@postman.com"],
   "leadership": [
-    {"name": "...", "role": "...", "linkedin_url": "..."}
+    {"name": "...", "role": "...", "linkedin_url": "https://www.linkedin.com/in/..."}
   ],
-  "confidence_score": 0.75,
+  "confidence_score": 0.92,
   "critique_notes": [],
   "pages_scraped": ["https://postman.com", "https://postman.com/company"],
   "llm_calls_used": 1,
+  "linkedin_calls_used": 3,
+  "prompt_tokens": 4491,
+  "completion_tokens": 610,
+  "total_tokens": 5101,
+  "estimated_cost_usd": 0.00104,
   "source_text": "--- Source: https://postman.com ---\n..."
 }
 ```
@@ -181,26 +226,41 @@ above is the intended way to run it.
 ## Project structure
 
 ```
-main.py              CLI entry point: runs graph.py per domain, writes output.json
-server.py             FastAPI app: runs graph.py from HTTP requests, serves frontend/dist
-graph.py              LangGraph StateGraph wiring the four agents together
+main.py              CLI entry point: runs domains concurrently via graph.py, writes output.json
+server.py             FastAPI app: runs graph.py from HTTP requests (+ SSE), serves frontend/dist
+graph.py              LangGraph StateGraph wiring the five agents together
 models.py             Pydantic schemas (ExtractionResult, CompanyIntel, TeamMember)
 agents/
   scraper.py          Scraper Agent -- Playwright, subpage discovery, no LLM
-  processor.py         Processor Agent -- HTML cleaning + email regex, no LLM
-  extractor.py         Extractor Agent -- the only LLM call in the normal path
+  processor.py         Processor Agent -- HTML cleaning + generic-email regex, no LLM
+  extractor.py         Extractor Agent -- the only LLM call in the normal path, tracks cost
   critique.py           Critique Agent -- deterministic hallucination/QA check
+  linkedin_search.py     LinkedIn Search Agent (bonus) -- optional, Tavily-backed
 requirements.txt
 .env.example
 output.json           Sample output from a run against the 3 test domains
+tests/                pytest suite for the deterministic logic (no LLM/browser mocking needed)
+  test_processor.py     Email filtering, HTML cleaning, text bounding
+  test_critique.py       Hallucination detection, confidence scoring, retry decisions
+  test_graph_routing.py    Pure routing functions + finalize_node aggregation
 frontend/             Vite + React app (talks to server.py's API)
   src/App.jsx           Page layout, empty/loading/error states, run-level stats
-  src/hooks/useEnrichment.js  Loads last results, submits runs, polls job status
+  src/hooks/useEnrichment.js  Loads last results, submits runs, follows SSE progress
   src/lib/api.js          Fetch wrappers for /api/*
   src/lib/format.js        Formatting + progress-merging helpers
   src/components/          Header, RunForm, ConsolePanel, StatsBar, ResultCard
                             (with the source-proof disclosure), PendingCard, StatusPill
 ```
+
+## Running tests
+
+```bash
+pytest
+```
+
+40+ tests covering the deterministic agent logic and graph routing --
+no LLM calls, no browser, no mocking needed since these are all pure
+functions operating on plain data.
 
 ## Notes on resilience
 

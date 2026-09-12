@@ -174,3 +174,122 @@ either way.
 | postman.com | success | 0.92 | 1 | 3 | 1 |
 | supabase.com | success | 0.50 | 0 | 0 | 1 |
 | vapi.ai | success | 0.66 | 0 | 1 | 1 |
+
+## Architecture review + 4-workstream expansion (2026-09-12)
+User asked "is this the best architecture, or can there be better?" --
+answered honestly: a repo survey found the design solid for the assignment,
+but with 5 concrete gaps, not just style nitpicks. User selected all 4
+proposed improvement tracks (a 5th, job persistence via SQLite, was
+explicitly NOT recommended -- over-engineering for a local single-user
+demo). Order chosen to minimize rework: shared-file changes first,
+structural changes last.
+
+**Workstream 1 -- email filtering + cost tracking:**
+- `agents/processor.py`: `extract_emails()` now actually uses
+  `GENERIC_PREFIXES` (was defined but unused before) -- only surfaces
+  contact@/sales@/support@-style addresses, matching the assignment's
+  literal spec ("generic or public emails"). Added `"help"` to the
+  prefix list after real data (`help@postman.com`) would otherwise have
+  been dropped.
+- `agents/critique.py`: email verification now checks membership in the
+  Processor's already-generic-filtered `raw_emails_found` (passed through
+  `graph.py`'s state) instead of a bare substring search -- simpler and
+  actually enforces "generic," not just "present." New resilience
+  behavior: if the LLM reports zero emails but the regex scan found real
+  generic ones, they're surfaced anyway with a note (never let a
+  trivially-detectable fact go unreported just because the model missed
+  it). Fixed a knock-on bug in the confidence-score math: the old
+  `len(a) - len(b)` dropped-count calculation could go negative once the
+  fallback could make the "verified" list longer than what was claimed.
+- `agents/extractor.py`: captures `response.usage` from Groq, added a
+  `TokenUsage` dataclass with `prompt_tokens`/`completion_tokens`/
+  `total_tokens`/`estimated_cost_usd`. Pricing ($0.15/$0.60 per 1M input/
+  output tokens for `openai/gpt-oss-120b`) looked up from
+  console.groq.com's own docs via WebSearch, not guessed -- overridable
+  via env vars, documented as an estimate.
+- `models.py` + `graph.py`: `CompanyIntel` and `PipelineState` carry the
+  new token/cost fields through `extract_node` -> `finalize_node`.
+- Frontend: `ResultCard.jsx` shows tokens + cost per domain,
+  `StatsBar.jsx`/`App.jsx` show a 5th "Est. total cost" stat.
+- Verified: `help@postman.com` still survives the new filter; token/cost
+  fields populate correctly (5,101 tokens / $0.00104 for a real postman.com
+  run); all 3 required domains still succeed at 1 LLM call each.
+
+**Workstream 2 -- pytest suite:**
+- New `tests/` (40+ tests): `test_processor.py`, `test_critique.py`,
+  `test_graph_routing.py` -- all pure functions, no LLM/browser mocking.
+  Two tests initially failed on first run, both because the test's
+  *assumption* was wrong, not the code: one didn't account for the new
+  fallback-to-regex-emails behavior masking a hallucination-drop it meant
+  to isolate; the other didn't realize reporting zero emails/leadership
+  already carries a small penalty regardless of drops. Fixed by adjusting
+  the test setup, not the production code. `pytest==9.1.1` added to
+  requirements.txt.
+
+**Workstream 3 -- concurrency + real-time streaming:**
+- `main.py` and `server.py`: domains now run concurrently via
+  `ThreadPoolExecutor` (bounded by `MAX_CONCURRENT_DOMAINS`, default 3)
+  instead of a sequential loop -- safe because each domain gets its own
+  Playwright browser instance already.
+- **Real finding from testing, not theoretical**: running 3 domains
+  concurrently against Groq's free/on-demand tier (8000 TPM) produced
+  repeated 429s and one outright failed domain (supabase.com), because a
+  single ~5000-token extraction call already uses most of that budget.
+  Fixed with a proactive pacing gate in `agents/extractor.py`
+  (`_throttle_llm_call`, `GROQ_MIN_SECONDS_BETWEEN_CALLS=45` default) --
+  strictly better than relying on reactive SDK retry-backoff, which was
+  costing 30+ seconds per collision anyway. Documented the honest
+  trade-off: for a small batch (<= MAX_CONCURRENT_DOMAINS) this makes
+  wall-clock time consistent (~130s for 3 domains) rather than
+  occasionally-fast-but-flaky; the real throughput ceiling is Groq's
+  free-tier TPM, not the architecture -- a paid tier would let concurrent
+  scraping's benefit fully show up.
+- `server.py`: `Job` gained `in_progress: set[str]` (more than one domain
+  can now be actively running, so the frontend can't assume "only the
+  first pending domain is running" anymore). New
+  `GET /api/enrich/{job_id}/stream` (SSE) pushes updates the moment
+  anything changes instead of the client polling every 1.2s -- honestly
+  documented as an internal short-poll-turned-push, not a full pub/sub
+  rewrite (would be over-engineering here).
+- Frontend: `lib/format.js`'s `mergeProgress()` now takes an `inProgress`
+  list and marks any domain in it "Processing" (was: only the first
+  pending domain). `useEnrichment.js` rewritten to use `EventSource`
+  instead of a `setTimeout` poll loop.
+- Verified end-to-end via Playwright against the real running server (not
+  just the build): submitted 2 domains, confirmed BOTH showed "Processing"
+  simultaneously with identical timestamps in the live console (proof of
+  real concurrency, not sequential), zero console errors, correct final
+  stats. (One false alarm during this test: a screenshot taken without
+  scrolling first showed an apparently-empty page with what looked like a
+  duplicate footer -- this was the same `whileInView` Motion animation
+  needing the viewport to actually scroll past a card before it reveals,
+  same as an earlier false alarm in this project; re-confirmed by checking
+  `article` element count in the DOM (2, correct) and re-screenshotting
+  after scrolling through, which rendered correctly.)
+
+**Workstream 4 -- LinkedIn/founder search (bonus):**
+- New `agents/linkedin_search.py`: `find_linkedin_url(name, domain)` via
+  Tavily (`tavily-python==0.8.2`), validates the result actually matches
+  `linkedin.com/in/...` before accepting it (same "verify, don't trust"
+  principle as Critique) -- never raises, returns `None` cleanly with no
+  `TAVILY_API_KEY` configured.
+- `graph.py`: new `linkedin_search` node, reached only when critique isn't
+  retrying AND at least one verified leader is still missing a LinkedIn
+  URL (`route_after_critique` extended to 3 branches); bounded to 3
+  lookups/domain; adds a transparency note per URL found ("via web search,
+  not present on the scraped pages"), and a skip-note when no API key is
+  configured. `CompanyIntel.linkedin_calls_used` added.
+- User provided a real `TAVILY_API_KEY` (in `.env`, gitignored, never
+  committed) for end-to-end verification -- not just unit-tested.
+- Verified: vapi.ai's Jason Mitura (previously `linkedin_url: null`) ->
+  found `https://www.linkedin.com/in/jasonmitura`, a real, correctly-
+  formatted profile URL. Re-ran the 3 required domains afterward: Postman
+  found real LinkedIn URLs for 2 of its 3 co-founders (Abhinav Asthana,
+  Ankit Sobti; Abhijit Kane's wasn't found, correctly returned as `None`
+  rather than a guess). Also independently verified the no-key no-op path
+  returns `linkedin_calls_used: 0` with a clean skip note, no error.
+
+**Docs**: README.md (architecture diagram/table, concurrency + rate-limit
+section, "Bonus features" section, output format example, project
+structure, "Running tests"), frontend/README.md (SSE mention), this file,
+and `.env.example` all updated to match.

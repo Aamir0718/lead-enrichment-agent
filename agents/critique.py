@@ -4,10 +4,17 @@ Cross-checks the Extractor's output against the actual scraped source text
 to catch hallucinations, recomputes a grounded confidence score, and decides
 whether the result is bad enough to warrant exactly one retry through the
 Extractor (the only case where this agent triggers an extra LLM call).
+
+Emails are verified against the Processor's `raw_emails_found` (already
+regex-confirmed-present AND filtered to generic/public-looking addresses),
+not a raw substring search -- this is what actually enforces the
+assignment's "generic or public emails" spec rather than accepting any
+address the LLM happens to name.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Optional
 
 from models import ExtractionResult, TeamMember
 
@@ -26,17 +33,37 @@ def _in_source(needle: str, haystack_lower: str) -> bool:
     return needle.lower() in haystack_lower
 
 
-def critique(extraction: ExtractionResult, combined_text: str) -> CritiqueOutcome:
+def critique(
+    extraction: ExtractionResult,
+    combined_text: str,
+    raw_emails_found: Optional[list[str]] = None,
+) -> CritiqueOutcome:
     notes: list[str] = []
     text_lower = combined_text.lower()
+    generic_emails = {e.lower() for e in (raw_emails_found or [])}
 
-    # --- Cross-check emails against the actual source text ---
-    verified_emails = []
+    # --- Cross-check emails against the Processor's deterministic,
+    # generic-filtered regex scan (not a raw substring check) -- this
+    # verifies both "is this real" (present on the page) and "is this the
+    # kind of email the assignment asks for" (contact@/sales@/support@-style,
+    # not a named individual's address) in one step. ---
+    verified_emails = [e for e in extraction.contact_emails if e.lower() in generic_emails]
+    dropped_email_count = len(extraction.contact_emails) - len(verified_emails)
     for email in extraction.contact_emails:
-        if _in_source(email, text_lower):
-            verified_emails.append(email)
-        else:
-            notes.append(f"Dropped email '{email}': not found verbatim in scraped source (likely hallucinated).")
+        if email.lower() not in generic_emails:
+            notes.append(
+                f"Dropped email '{email}': not found among the generic/public emails detected on the page."
+            )
+
+    # Resilience fallback: a plain regex scan can find an obviously public
+    # email even when the LLM's extraction missed it entirely. Don't let a
+    # trivially-detectable fact go unreported just because the model didn't
+    # mention it.
+    if not verified_emails and generic_emails:
+        verified_emails = sorted(generic_emails)
+        notes.append(
+            f"LLM reported no emails; added {len(verified_emails)} generic email(s) found directly via regex scan."
+        )
 
     # --- Cross-check leadership names against the actual source text ---
     verified_leadership = []
@@ -58,8 +85,7 @@ def critique(extraction: ExtractionResult, combined_text: str) -> CritiqueOutcom
     # Start from the LLM's self-estimate, then penalize for anything we
     # couldn't verify or that was missing outright.
     score = extraction.confidence_score
-    dropped_count = len(extraction.contact_emails) - len(verified_emails)
-    dropped_count += len(extraction.leadership) - len(verified_leadership)
+    dropped_count = dropped_email_count + (len(extraction.leadership) - len(verified_leadership))
     if dropped_count:
         score -= 0.1 * dropped_count
     if not has_overview:

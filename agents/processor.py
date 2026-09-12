@@ -19,8 +19,10 @@ MAX_CHARS_PER_PAGE = 6000  # keep per-page text bounded before concatenation
 MAX_TOTAL_CHARS = 18000  # hard cap on combined text sent to the LLM
 
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
-# Generic/public-looking mailbox prefixes we care about per the assignment.
-GENERIC_PREFIXES = ("contact", "sales", "support", "hello", "hi", "info", "team", "press", "careers")
+# Generic/public-looking mailbox prefixes -- the assignment spec asks
+# specifically for "generic or public emails (e.g. contact@, sales@,
+# support@)", not any address found on the page.
+GENERIC_PREFIXES = ("contact", "sales", "support", "hello", "hi", "help", "info", "team", "press", "careers")
 
 
 @dataclass
@@ -48,7 +50,13 @@ def extract_emails(text: str) -> set[str]:
     # Drop obvious asset/junk matches (e.g. image@2x style false positives already
     # excluded by the regex requiring a TLD, but guard against extremely long
     # "emails" that are really minified JS/CSS artifacts leaking through).
-    return {e for e in found if len(e) < 60}
+    found = {e for e in found if len(e) < 60}
+    # Only surface generic/public-looking mailboxes -- a named individual's
+    # email (jane.doe@company.com) isn't what the assignment asks for, and
+    # reporting it would be a privacy overreach for a "public contact points"
+    # feature. This also makes this set a clean fallback source of truth:
+    # the critique agent can trust anything here without hallucination risk.
+    return {e for e in found if e.split("@")[0].startswith(GENERIC_PREFIXES)}
 
 
 def process_pages(pages: dict[str, str]) -> ProcessedContent:
